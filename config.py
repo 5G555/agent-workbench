@@ -7,6 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 live_path = os.path.dirname(os.path.abspath(__file__))  # 项目根目录
 env_path = os.path.join(live_path, ".env")
 
+# LangGraph 断点库放项目内 var/（已 gitignore）；用绝对路径，避免跟着启动目录漂移
+checkpoint_db_file = os.path.join(live_path, "var", "checkpoints.db")
+CHECKPOINT_DB_URL = "sqlite:///" + checkpoint_db_file.replace("\\", "/")
+
 
 class Settings(BaseSettings):
     """配置模型：每个属性对应 .env 里的一项（大小写不敏感）。
@@ -53,7 +57,7 @@ class Settings(BaseSettings):
     finetuned_classifier_path: str = "D:/AI-Models/classifier/finetune"
 
     # ── Checkpointer（LangGraph 断点存储）──
-    checkpoint_db_url: str = "sqlite:///checkpoints.db"
+    checkpoint_db_url: str = CHECKPOINT_DB_URL
 
     # ── JWT 认证 ──
     jwt_secret_key: str  # 必填

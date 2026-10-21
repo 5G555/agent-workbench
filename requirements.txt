@@ -30,6 +30,7 @@ langchain-openai>=1.7            # LangChain 的 OpenAI 适配（ChatOpenAI）
 # ---- Agent 编排 ------------------------------------------------------------
 langgraph>=0.2                   # 状态图 + checkpoint + interrupt(HITL)
 langchain-core>=0.3              # LangGraph 的消息 / Runnable 抽象层
+langchain>=1.0                   # init_chat_model 等高层封装（llm_factory 用到）
 
 # ---- 工具协议 --------------------------------------------------------------
 mcp>=1.2,<2                      # 锁 1.x：2.0 破坏性升级（FastMCP→MCPServer、wire type 改 snake_case）
