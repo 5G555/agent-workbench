@@ -1,0 +1,47 @@
+# ============================================================================
+#  my-agent · 运行时依赖（pip / conda 环境通用）
+#  安装：python -m pip install -r requirements.txt
+#  原则：只写直接依赖 + 最低版本；精确版本由 uv/pip 锁文件或环境快照保证
+# ============================================================================
+
+# ---- Web / API 层 ----------------------------------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9          # 文件上传表单解析
+sse-starlette>=2.1               # SSE 流式输出（Agent 逐 token 推送）
+
+# ---- 配置与数据校验 --------------------------------------------------------
+pydantic>=2.7,<3                 # 结构化输出 / 工具 schema
+pydantic-settings>=2.2           # .env → Settings 对象
+python-dotenv>=1.0
+
+# ---- HTTP / 重试 / 序列化 --------------------------------------------------
+httpx>=0.27                      # 异步 HTTP（LLM、MCP、联网检索都走它）
+tenacity>=8.2                    # 指数退避重试
+orjson>=3.10                     # 快速 JSON（日志、缓存）
+structlog>=24.1                  # 结构化日志（带 trace_id）
+
+# ---- LLM SDK ---------------------------------------------------------------
+openai>=1.40                     # OpenAI 兼容协议（Responses / Chat Completions）
+anthropic>=0.34                  # Claude 原生 SDK
+langchain-openai>=1.7            # LangChain 的 OpenAI 适配（ChatOpenAI）
+# google-genai>=1.0              # 需要 Gemini 时取消注释
+
+# ---- Agent 编排 ------------------------------------------------------------
+langgraph>=0.2                   # 状态图 + checkpoint + interrupt(HITL)
+langchain-core>=0.3              # LangGraph 的消息 / Runnable 抽象层
+
+# ---- 工具协议 --------------------------------------------------------------
+mcp>=1.2,<2                      # 锁 1.x：2.0 破坏性升级（FastMCP→MCPServer、wire type 改 snake_case）
+
+# ---- 持久化 ----------------------------------------------------------------
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29                    # Postgres 异步驱动
+alembic>=1.13                    # 数据库迁移
+redis>=5.0,<6                    # 会话 / 缓存 / 限流
+
+# ---- 可观测性 --------------------------------------------------------------
+langfuse>=2.30                   # LLM 调用链追踪；未配置 key 时应能降级为 no-op
+
+# ---- 工具函数 --------------------------------------------------------------
+tiktoken>=0.7                    # token 计数与成本估算

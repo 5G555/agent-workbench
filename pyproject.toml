@@ -1,0 +1,32 @@
+# Myagent · 仅存放工具配置；依赖请见 requirements.txt / requirements-dev.txt
+# （本文件不含 [project] 段，故不参与打包，pip install -e . 不适用）
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = [".git", "__pycache__", "var", "data"]
+
+[tool.ruff.lint]
+# ruff 0.16 起默认规则从 59 条涨到 413 条，必须显式声明，否则满屏告警
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC", "S", "RUF"]
+ignore = [
+    "S101",                 # 允许 assert（测试与内部不变量）
+    "RUF001", "RUF002", "RUF003",  # 中文全角标点不报「歧义 unicode」
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+include = ["api", "agents", "core", "tests"]
+# 项目共用 C 盘的 conda 环境 my-agent（conda 环境无 pyvenv.cfg，必须显式指路）
+venvPath = "C:/Users/Administrator/anaconda3/envs"
+venv = "my-agent"
