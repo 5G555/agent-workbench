@@ -153,6 +153,8 @@ class HistoryStore:
         """列出某用户的所有会话（按最近活动倒序），带上标题。
 
         prefix 传 "{user_id}:"，会话键在存的时候就带了这个前缀，天然隔离。
+        标题为空时（加 qa_sessions 表之前建的老会话）用首条用户消息兜底，
+        免得前端只能显示一串 session_id。
         """
         await self.ensure_table()
         conn = await self._connect()
@@ -162,7 +164,15 @@ class HistoryStore:
                 SELECT m.session_id,
                        max(m.created_at) AS last_at,
                        count(*)          AS messages,
-                       coalesce(s.title, '') AS title
+                       coalesce(
+                           nullif(s.title, ''),
+                           left((
+                               SELECT content FROM qa_messages q
+                               WHERE q.session_id = m.session_id AND q.role = 'user'
+                               ORDER BY q.id LIMIT 1
+                           ), 24),
+                           ''
+                       ) AS title
                 FROM qa_messages m
                 LEFT JOIN qa_sessions s ON s.session_id = m.session_id
                 WHERE m.session_id LIKE $1

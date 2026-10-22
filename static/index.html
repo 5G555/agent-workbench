@@ -221,6 +221,8 @@ let streaming = true;
 let busy = false;
 let abortCtl = null;
 let currentSession = "";
+// sid → 标题，供 openSession 复用（避免把 session_id 当标题显示）
+const sessionTitles = new Map();
 
 // ── 令牌管理 ───────────────────────────────────────────
 const store = {
@@ -447,7 +449,9 @@ async function loadSessions() {
     const list = await res.json();
     sessionsBox.innerHTML = "";
     if (!list.length) { sessionsBox.innerHTML = '<div class="empty">还没有会话</div>'; return; }
+    sessionTitles.clear();
     list.forEach(item => {
+      sessionTitles.set(item.session_id, item.title || "未命名会话");
       const el = document.createElement("div");
       el.className = "session" + (item.session_id === currentSession ? " active" : "");
       const t = document.createElement("div");
@@ -498,12 +502,18 @@ async function loadSessions() {
 
 async function openSession(sid) {
   currentSession = sid;
-  title.textContent = sid;
+  // 标题优先用会话名；老会话没有标题就用首问，再没有就显示"未命名会话"，
+  // 绝不把 session_id 直接甩给用户看（那是一串看不懂的随机字符）。
+  title.textContent = sessionTitles.get(sid) || "未命名会话";
+  title.dataset.sid = sid;
   chat.innerHTML = "";
   try {
     const res = await apiFetch(`${API}/history/${sid}`);
     const rows = await res.json();
-    if (!rows.length) { addRow("assistant", "这个会话还没有消息。"); }
+    if (!rows.length) {
+      addRow("assistant", "这个会话还没有消息，可以直接输入问题。");
+      title.textContent = "新会话";
+    }
     rows.forEach(r => {
       const bubble = addRow(r.role === "user" ? "user" : "assistant", r.content);
       if (r.role !== "user") renderMeta(bubble, r.answer_mode, []);
@@ -515,6 +525,7 @@ async function openSession(sid) {
 function startNewSession() {
   currentSession = newSessionId();
   title.textContent = "新会话";
+  delete title.dataset.sid;
   chat.innerHTML = "";
   addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
   loadSessions();
@@ -602,6 +613,8 @@ async function send() {
   busy = true; sendBtn.disabled = true; stopBtn.style.display = "";
   input.value = ""; input.style.height = "44px";
   if (!currentSession) currentSession = newSessionId();
+  // 新会话的首问直接当标题显示，不用等接口回来
+  if (title.textContent === "新会话") title.textContent = message.slice(0, 24);
 
   addRow("user", message);
   const bubble = addRow("assistant", "", true);
