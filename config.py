@@ -43,6 +43,33 @@ class Settings(BaseSettings):
     # ── Milvus 向量库 ──
     milvus_host: str = "localhost"
     milvus_port: int = 19532
+    milvus_database_name: str = "myagent"  # 与本项目其它数据隔离
+    milvus_collection_name: str = "qa_chunks"  # 知识库集合（相当于表）
+
+    # ── 检索参数 ──
+    # 父块/子块比 integrated 的 1200/300 更小：测试语料是短文，
+    # 父块过大会让"一篇文档=一个父块"，命中后带进来的上下文过于宽泛。
+    retrieval_k: int = 5  # 混合检索召回条数
+    candidate_m: int = 3  # 精排后最终送给 LLM 的文档数
+    parent_chunk_size: int = 600  # 父块：给 LLM 看的上下文
+    child_chunk_size: int = 200  # 子块：用来算向量的检索单元
+    chunk_overlap: int = 50  # 相邻块重叠字符数
+
+    # ── 嵌入 / 精排的运行设备 ──
+    embedding_device: str = "cuda"  # 显存不够时改 "cpu"
+    embedding_use_fp16: bool = True  # GPU 上半精度，省一半显存
+
+    # ── FAQ 精确命中 ──
+    # BM25 原始分经 softmax 归一化后，最高分 ≥ 该阈值才认为命中。
+    # 阈值受样本量影响：FAQ 条数少时分布更"平"，容易误命中，需要调高。
+    faq_threshold: float = 0.85
+
+    # ── Redis 答案缓存 ──
+    # 缓存的是"完整回答"，不是问题列表（问题列表已常驻内存）。
+    # Redis 挂了会自动降级为不缓存，不影响问答主流程。
+    redis_url: str = "redis://localhost:6379/0"
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 86400  # 答案缓存 24 小时
 
     # ── 大模型（DeepSeek）──
     deepseek_api_key: str  # 必填，来自 .env
@@ -51,9 +78,11 @@ class Settings(BaseSettings):
     deepseek_model_coder: str = "deepseek-coder"
 
     # ── 本地模型权重路径（统一放 D 盘，不跟项目目录走）──
-    reranker_model_path: str = "D:/AI-Models/reranker/bge-reranker-large"
+    bge_m3_model_path: str = "D:/AI-Models/embedding/bge-m3"  # 混合检索的嵌入模型
+    reranker_model_path: str = "D:/AI-Models/reranker/bge-reranker-large"  # 精排模型
+    query_classifier_model_path: str = "D:/AI-Models/classifier/bert_query_classifier"  # 意图分类
+    # 下面两个是 EduAgent 体系的分类器，本项目的 qa 用不上，确认后可删
     classifier_model_path: str = "D:/AI-Models/classifier/all-MiniLM-L6-v2"
-    bge_m3_model_path: str = "D:/AI-Models/embedding/bge-m3"
     finetuned_classifier_path: str = "D:/AI-Models/classifier/finetune"
 
     # ── Checkpointer（LangGraph 断点存储）──
@@ -82,5 +111,8 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """获取全局唯一的配置对象。"""
-    return Settings()
+    """获取全局唯一的配置对象。
+
+    必填字段由 pydantic-settings 从 .env 读取，静态检查看不到，故忽略 call-arg。
+    """
+    return Settings()  # pyright: ignore[reportCallIssue]

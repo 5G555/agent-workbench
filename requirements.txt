@@ -41,6 +41,17 @@ asyncpg>=0.29                    # Postgres 异步驱动
 alembic>=1.13                    # 数据库迁移
 redis>=5.0,<6                    # 会话 / 缓存 / 限流
 
+# ---- RAG：向量库 + 嵌入 + 精排 ---------------------------------------------
+# 版本刻意锁大版本：transformers 5.x / sentence-transformers 6.x / pymilvus 3.x
+# 都有破坏性变更，与 FlagEmbedding、milvus-model 的适配需要重新验证。
+torch>=2.14                      # 需装 CUDA 版：--index-url 见 README
+transformers>=4.57,<5
+sentence-transformers>=5.7,<6    # CrossEncoder（bge-reranker-large）
+FlagEmbedding>=1.4               # BGE 系列加载
+milvus-model>=0.2                # BGEM3EmbeddingFunction（稠密+稀疏一次输出）
+pymilvus>=2.5,<3                 # Milvus 客户端
+numpy>=2.0                       # 向量运算
+
 # ---- 可观测性 --------------------------------------------------------------
 langfuse>=2.30                   # LLM 调用链追踪；未配置 key 时应能降级为 no-op
 
