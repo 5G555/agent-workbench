@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,61 @@ from config import Settings, get_settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 角色等级：数值越大权限越高。文档的 min_role 表示"至少要什么角色才能看"
+ROLE_LEVEL = {"user": 0, "admin": 1}
+PUBLIC_DEPARTMENT = "*"  # 文档的 department 为 * 表示全公司可见
+
+
+def roles_for(role: str) -> list[str]:
+    """当前角色能看到哪些 min_role 的文档。user 只能看 user 级，admin 两级都能看。"""
+    level = ROLE_LEVEL.get(role, 0)
+    return [name for name, value in ROLE_LEVEL.items() if value <= level]
+
+
+@dataclass(frozen=True)
+class RetrievalScope:
+    """一次检索的权限范围。
+
+    把"谁能看什么"收成一个对象，检索函数只认它，不再一层层传 tenant/department/role。
+    管理员（role=admin）在租户内不做部门与角色限制——这正是"管理员"的含义。
+    """
+
+    tenant_id: str
+    department: str = PUBLIC_DEPARTMENT
+    role: str = "user"
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    def filter_expr(self, source_filter: str | None = None) -> str:
+        """拼 Milvus 过滤表达式。
+
+        租户条件永远在；部门与角色条件对普通用户生效，管理员跳过。
+        部门条件是 `部门匹配 or 全公司可读`，所以公共文档谁都能搜到。
+        """
+        conditions: list[str] = []
+        if self.tenant_id:
+            conditions.append(f'tenant_id == "{self.tenant_id}"')
+
+        if not self.is_admin:
+            # 注意 department 的两种含义：
+            #   文档上 '*' = 全公司可见；用户上 '*' = 未分配部门（那就只能看公共文档）
+            # 所以这里两种分支都要拼条件，不能因为用户是 '*' 就跳过部门限制。
+            if self.department and self.department != PUBLIC_DEPARTMENT:
+                conditions.append(
+                    f'(department == "{self.department}" or department == "{PUBLIC_DEPARTMENT}")'
+                )
+            else:
+                conditions.append(f'department == "{PUBLIC_DEPARTMENT}"')
+            allowed = roles_for(self.role)
+            joined = ", ".join(f'"{r}"' for r in allowed)
+            conditions.append(f"min_role in [{joined}]")
+
+        if source_filter:
+            conditions.append(f'source == "{source_filter}"')
+        return " and ".join(conditions)
 
 
 class VectorStore:
@@ -79,6 +135,9 @@ class VectorStore:
             schema.add_field("timestamp", DataType.VARCHAR, max_length=50)
             # 多租户隔离字段：检索时强制带 tenant_id 条件，跨租户不可见
             schema.add_field("tenant_id", DataType.VARCHAR, max_length=64)
+            # 细粒度权限：部门（* = 全公司可见）与最低角色要求
+            schema.add_field("department", DataType.VARCHAR, max_length=64)
+            schema.add_field("min_role", DataType.VARCHAR, max_length=16)
 
             index_params = self.client.prepare_index_params()
             index_params.add_index(
@@ -96,8 +155,10 @@ class VectorStore:
                 params={"drop_ratio_build": 0.2},
             )
 
-            # 租户字段建标量索引，过滤时不至于全表扫
+            # 三个权限字段都建标量索引，过滤时不至于全表扫
             index_params.add_index(field_name="tenant_id", index_name="tenant_index")
+            index_params.add_index(field_name="department", index_name="department_index")
+            index_params.add_index(field_name="min_role", index_name="min_role_index")
             self.client.create_collection(
                 collection_name=self.collection_name,
                 schema=schema,
@@ -110,11 +171,19 @@ class VectorStore:
         self.client.load_collection(self.collection_name)
 
     # ── 入库 ────────────────────────────────────────────────
-    def add_documents(self, documents: list[Document], tenant_id: str = "") -> int:
+    def add_documents(
+        self,
+        documents: list[Document],
+        tenant_id: str = "",
+        department: str = PUBLIC_DEPARTMENT,
+        min_role: str = "user",
+    ) -> int:
         """把子块向量化后 upsert 进 Milvus，返回写入条数。
 
-        tenant_id 决定这份资料归谁：不传就用配置里的默认租户。
-        写入必须带租户，否则检索时会被 tenant 条件过滤掉（等于写进去也查不到）。
+        三个权限字段都必须写对，否则检索时会被过滤掉（等于写进去也查不到）：
+            tenant_id  归属租户
+            department 归属部门；* 表示全公司可见
+            min_role   最低角色要求（user / admin）
         """
         if not documents:
             return 0
@@ -131,11 +200,18 @@ class VectorStore:
                 int(idx): float(value) for idx, value in zip(row.indices, row.data, strict=False)
             }
             meta = doc.metadata
+            dept = meta.get("department", department)
+            role = meta.get("min_role", min_role)
+            owner = meta.get("tenant_id", tenant)
             rows.append(
                 {
-                    # 仅用于内容去重（非安全用途），显式声明 usedforsecurity=False
+                    # 主键必须包含归属信息：只用内容哈希的话，两个租户/部门里
+                    # 一样的句子会撞成一条，后写的把先写的覆盖掉（等于串数据）。
                     "id": hashlib.md5(
-                        doc.page_content.encode("utf-8"), usedforsecurity=False
+                        (
+                            f"{owner}|{dept}|{role}|{meta.get('source', '')}|{doc.page_content}"
+                        ).encode(),
+                        usedforsecurity=False,
                     ).hexdigest(),
                     "text": doc.page_content,
                     # Milvus 要求 float32 的 ndarray，模型返回的是普通 list
@@ -145,7 +221,9 @@ class VectorStore:
                     "parent_content": meta.get("parent_content", doc.page_content),
                     "source": meta.get("source", "unknown"),
                     "timestamp": meta.get("timestamp", "unknown"),
-                    "tenant_id": meta.get("tenant_id", tenant),
+                    "tenant_id": owner,
+                    "department": dept,
+                    "min_role": role,
                 }
             )
 
@@ -159,28 +237,18 @@ class VectorStore:
         return len(rows)
 
     # ── 检索 + 精排 ─────────────────────────────────────────
-    @staticmethod
-    def build_filter(tenant_id: str | None, source_filter: str | None) -> str:
-        """拼 Milvus 过滤表达式。
-
-        多租户的核心就这一行：检索条件里**永远**带 tenant_id。
-        tenant_id 为空只允许出现在管理员跨租户统计这类场景，问答链路必须传。
-        """
-        conditions: list[str] = []
-        if tenant_id:
-            conditions.append(f'tenant_id == "{tenant_id}"')
-        if source_filter:
-            conditions.append(f'source == "{source_filter}"')
-        return " and ".join(conditions)
-
     def hybrid_search_with_rerank(
         self,
         query: str,
         k: int | None = None,
         source_filter: str | None = None,
-        tenant_id: str | None = None,
+        scope: RetrievalScope | None = None,
     ) -> list[Document]:
-        """稠密+稀疏混合检索，取去重父块后用 CrossEncoder 精排，返回 Top-M 父文档。"""
+        """稠密+稀疏混合检索，取去重父块后用 CrossEncoder 精排，返回 Top-M 父文档。
+
+        权限条件由 scope 决定；不传 scope 时退化为"仅默认租户、全公司可见"，
+        脚本与测试可以这样用，线上链路一律显式传。
+        """
         k = k or self.settings.retrieval_k
         q_emb = self.embedding_function([query])
 
@@ -190,7 +258,8 @@ class VectorStore:
             int(idx): float(value) for idx, value in zip(row.indices, row.data, strict=False)
         }
 
-        filter_expr = self.build_filter(tenant_id, source_filter)
+        active_scope = scope or RetrievalScope(tenant_id=self.settings.default_tenant_id)
+        filter_expr = active_scope.filter_expr(source_filter)
 
         dense_request = AnnSearchRequest(
             data=[dense_vector],
@@ -265,15 +334,17 @@ class VectorStore:
         return unique
 
     # ── 计数（验证入库用）───────────────────────────────────
-    def count(self, tenant_id: str | None = None) -> int:
+    def count(self, tenant_id: str | None = None, scope: RetrievalScope | None = None) -> int:
         """用 query 聚合统计，比 get_collection_stats 的 row_count 更及时。
 
         注意 filter 不能传空串，空过滤会返回 0 条。
-        传 tenant_id 时只统计该租户的条数（灌完数据自检用）。
+        传 tenant_id 只按租户统计；传 scope 则按完整权限条件统计（验证权限用）。
         """
         conditions = ['id != ""']
-        if tenant_id:
-            conditions.append(self.build_filter(tenant_id, None))
+        if scope is not None:
+            conditions.append(scope.filter_expr())
+        elif tenant_id:
+            conditions.append(f'tenant_id == "{tenant_id}"')
         res = self.client.query(
             collection_name=self.collection_name,
             filter=" and ".join(conditions),

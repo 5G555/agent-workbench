@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agents.qa.cache import answer_key
 from agents.qa.faq import bm25_confidence
-from agents.qa.retrieval.vector_store import VectorStore
+from agents.qa.retrieval.vector_store import RetrievalScope, roles_for
 
 
 # ── 置信度归一化（与库大小无关）──────────────────────────
@@ -40,6 +40,13 @@ def test_cache_key_scoped_by_tenant():
     assert a != b, "不同租户的相同问题不能共用缓存"
 
 
+def test_cache_key_scoped_by_department_and_role():
+    """同一租户内，不同部门 / 不同角色也不能共用缓存。"""
+    base = answer_key(1, "q", "t1", "财务部", "user")
+    assert base != answer_key(1, "q", "t1", "销售部", "user")
+    assert base != answer_key(1, "q", "t1", "财务部", "admin")
+
+
 def test_cache_key_stable_for_same_tenant():
     assert answer_key(1, "你们怎么收费", "t1") == answer_key(1, " 你们 怎么收费 ", "t1")
 
@@ -51,16 +58,50 @@ def test_cache_key_without_tenant_keeps_old_shape():
 
 # ── Milvus 过滤表达式 ─────────────────────────────────────
 def test_filter_always_contains_tenant():
-    expr = VectorStore.build_filter("tenant_a", None)
-    assert expr == 'tenant_id == "tenant_a"'
+    scope = RetrievalScope(tenant_id="tenant_a", department="*", role="admin")
+    assert scope.filter_expr() == 'tenant_id == "tenant_a"'
 
 
 def test_filter_combines_tenant_and_source():
-    expr = VectorStore.build_filter("tenant_a", "01_产品概览")
+    scope = RetrievalScope(tenant_id="tenant_a", role="admin")
+    expr = scope.filter_expr("01_产品概览")
     assert 'tenant_id == "tenant_a"' in expr
     assert 'source == "01_产品概览"' in expr
     assert " and " in expr
 
 
-def test_filter_empty_when_no_conditions():
-    assert VectorStore.build_filter(None, None) == ""
+def test_filter_without_tenant_keeps_role_condition():
+    """租户为空（脚本场景）时不再拼租户条件，但角色限制仍然生效。"""
+    expr = RetrievalScope(tenant_id="").filter_expr()
+    assert "tenant_id" not in expr
+    assert 'min_role in ["user"]' in expr
+
+
+# ── 细粒度权限：部门与角色 ────────────────────────────────
+def test_user_sees_own_department_and_public():
+    scope = RetrievalScope(tenant_id="t1", department="销售部", role="user")
+    expr = scope.filter_expr()
+    assert '(department == "销售部" or department == "*")' in expr
+    assert 'min_role in ["user"]' in expr
+
+
+def test_user_without_department_only_sees_public():
+    """用户部门为 * 表示未分配部门，只能看全公司文档，不能因此跳过部门限制。"""
+    scope = RetrievalScope(tenant_id="t1", department="*", role="user")
+    expr = scope.filter_expr()
+    assert 'department == "*"' in expr
+    assert "or department" not in expr
+    assert 'min_role in ["user"]' in expr
+
+
+def test_admin_bypasses_department_and_role():
+    scope = RetrievalScope(tenant_id="t1", department="销售部", role="admin")
+    expr = scope.filter_expr()
+    assert "department" not in expr, "管理员不该被部门限制"
+    assert "min_role" not in expr, "管理员能看所有角色级别的文档"
+
+
+def test_roles_for_hierarchy():
+    assert roles_for("user") == ["user"]
+    assert set(roles_for("admin")) == {"user", "admin"}
+    assert roles_for("unknown") == ["user"], "未知角色按最低权限处理"

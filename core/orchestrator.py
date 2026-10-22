@@ -264,6 +264,9 @@ class Orchestrator:
             "original_query": request.user_message,
             "user_id": request.user_id,
             "tenant_id": request.tenant_id,
+            # 细粒度权限：部门与角色随请求带进图，检索时用于拼过滤条件
+            "department": request.context.get("department") or "*",
+            "role": request.context.get("role") or "user",
             "session_id": request.session_id,
             **extra,
         }

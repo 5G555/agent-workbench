@@ -71,7 +71,12 @@ def _build_request(request: AskRequest, user: dict[str, str]) -> AgentRequest:
         session_id=request.session_id,
         agent_type=agent_type,
         user_message=request.message,
-        context={**request.context, "source": request.source},
+        context={
+            **request.context,
+            "source": request.source,
+            "department": user.get("department", "*"),
+            "role": user.get("role", "user"),
+        },
     )
 
 

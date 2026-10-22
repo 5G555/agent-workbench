@@ -34,6 +34,9 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128, description="密码，至少 6 位")
     # 生产环境租户应由管理员开通，这里放开只是为了本地能建多个租户做隔离验证
     tenant_id: str = Field(default="tenant_default", max_length=64, description="所属租户")
+    department: str = Field(default="*", max_length=64, description="所属部门；* 表示全公司可见")
+    # 同上，生产环境角色由管理员授予
+    role: str = Field(default="user", pattern="^(user|admin)$", description="角色")
 
 
 class LoginRequest(BaseModel):
@@ -54,13 +57,18 @@ class TokenResponse(BaseModel):
     user_id: str
     role: str
     tenant_id: str
+    department: str = "*"
 
 
-def _issue_tokens(user_id: str, role: str, tenant_id: str) -> TokenResponse:
+def _issue_tokens(user_id: str, role: str, tenant_id: str, department: str = "*") -> TokenResponse:
     """签发一对令牌。"""
     settings = get_settings()
-    access, access_ttl = create_access_token(user_id=user_id, role=role, tenant_id=tenant_id)
-    refresh, _ = create_refresh_token(user_id=user_id, role=role, tenant_id=tenant_id)
+    access, access_ttl = create_access_token(
+        user_id=user_id, role=role, tenant_id=tenant_id, department=department
+    )
+    refresh, _ = create_refresh_token(
+        user_id=user_id, role=role, tenant_id=tenant_id, department=department
+    )
     return TokenResponse(
         access_token=access,
         refresh_token=refresh,
@@ -69,6 +77,7 @@ def _issue_tokens(user_id: str, role: str, tenant_id: str) -> TokenResponse:
         user_id=user_id,
         role=role,
         tenant_id=tenant_id,
+        department=department,
     )
 
 
@@ -81,10 +90,18 @@ def _remaining_seconds(payload: dict) -> int:
 @router.post("/register", response_model=TokenResponse, summary="注册并直接登录")
 async def register(request: RegisterRequest) -> TokenResponse:
     store = get_user_store()
-    user = await store.create(request.username, request.password, tenant_id=request.tenant_id)
+    user = await store.create(
+        request.username,
+        request.password,
+        role=request.role,
+        tenant_id=request.tenant_id,
+        department=request.department,
+    )
     if user is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
-    return _issue_tokens(str(user["id"]), user["role"], user["tenant_id"])
+    return _issue_tokens(
+        str(user["id"]), user["role"], user["tenant_id"], user.get("department", "*")
+    )
 
 
 @router.post("/login", response_model=TokenResponse, summary="登录")
@@ -104,7 +121,9 @@ async def login(request: LoginRequest) -> TokenResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
 
     logger.info("auth.login_success", user_id=str(user["id"]), username=user["username"])
-    return _issue_tokens(str(user["id"]), user["role"], user["tenant_id"])
+    return _issue_tokens(
+        str(user["id"]), user["role"], user["tenant_id"], user.get("department", "*")
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse, summary="用 refresh 换新令牌（轮换）")
@@ -128,6 +147,7 @@ async def refresh(request: RefreshRequest) -> TokenResponse:
         str(payload["sub"]),
         str(payload.get("role", "user")),
         str(payload.get("tenant_id", "tenant_default")),
+        str(payload.get("department", "*")),
     )
 
 

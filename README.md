@@ -169,26 +169,60 @@ python -c "import asyncio; from langchain_mcp_adapters.client import MultiServer
 python -c "import asyncio; from agents.qa.cache import bump_cache_version; print(asyncio.run(bump_cache_version()))"
 ```
 
-## 多租户隔离
+## 多租户与细粒度权限
 
-租户来源是 JWT 里的 `tenant_id`，一路带到检索、缓存、FAQ 三层：
+权限有三个维度，都来自 JWT（注册时可指定，生产应由管理员开通）：
+
+| 维度 | 举例 | 作用 |
+|---|---|---|
+| `tenant_id` | `tenant_default` / `tenant_demo` | 公司级隔离，跨租户完全不可见 |
+| `department` | `财务部` / `销售部` / `*` | 部门级；文档 `*` 表示全公司可见 |
+| `role` | `user` / `admin` | 角色级；文档 `min_role` 表示最低角色要求 |
+
+**检索条件的生成规则**（`RetrievalScope.filter_expr`）：
+
+```
+管理员（role=admin）：  tenant_id == "t1"
+普通用户（财务部）：    tenant_id == "t1"
+                        and (department == "财务部" or department == "*")
+                        and min_role in ["user"]
+普通用户（无部门 *）：  tenant_id == "t1" and department == "*" and min_role in ["user"]
+```
+
+注意 `*` 的两种含义：**文档上**表示全公司可见，**用户上**表示未分配部门（那就只能看公共文档）。
+
+隔离渗透到四层：
 
 | 层 | 隔离方式 |
 |---|---|
-| Milvus | 每条 chunk 带 `tenant_id` 字段，检索表达式**永远**包含它（`VectorStore.build_filter`） |
-| FAQ | 表加 `tenant_id`，唯一键改成 `(tenant_id, question)`，每租户一份 BM25 索引 |
-| 答案缓存 | 键里拼租户摘要：`qa:ans:v{ver}:t{tenant_hash}:{query_hash}` |
-| 分类提示词 | 知识库主题清单按租户取，A 公司看不到 B 公司的文档名 |
-| 来源列表 | `/api/v1/qa/sources` 只返回自己租户的 |
+| Milvus | chunk 带 `tenant_id` / `department` / `min_role`，检索表达式永远包含它们 |
+| 主键 | `md5(租户\|部门\|角色\|来源\|内容)`——只用内容哈希会让相同句子跨部门互相覆盖 |
+| 答案缓存 | 键含完整范围：`qa:ans:v{ver}:s{scope_hash}:{query_hash}` |
+| 提示词 / 来源列表 | 知识库主题与 `/sources` 都按同一范围过滤 |
 
-**灌数据要指定租户**：
+**灌数据要指定归属**：
 
 ```powershell
-python -m scripts.ingest --reset --tenant tenant_default   # 改了 schema 必须重建
+python -m scripts.ingest --reset --tenant tenant_default --department '*' --min-role user
 python -m scripts.ingest data\tenant_demo_kb --tenant tenant_demo
+python -m scripts.ingest data\dept_finance_kb --tenant tenant_default --department 财务部
+python -m scripts.ingest data\admin_kb --tenant tenant_default --min-role admin
 python -m scripts.ingest_faq --tenant tenant_default
-python -m scripts.ingest_faq data\tenant_demo_faq.csv --tenant tenant_demo
 ```
+
+验证（仓库内带了三套演示数据：公共 / 财务部 / 管理员）：
+
+```
+carol（财务部）问「2026 年市场费用预算是多少」→ 命中 finance_预算与报销
+dave （销售部）问同一句                       → no_result（看不到）
+root （admin） 问「新增租户需要先做什么」      → 命中 admin_操作手册
+carol（财务部）问同一句                       → no_result（角色不够）
+```
+
+实测可见条数：管理员 74 / 财务部 64 / 销售部 56 / 无部门 56 / 演示租户 8。
+
+> FAQ 目前只做租户级隔离：FAQ 是人工整理的租户级问答对，通常对全公司口径一致。
+> 若某个部门的 FAQ 需要单独维护，再给它加 `department` 字段即可。
 
 验证隔离（仓库里带了 `tenant_demo` 的演示数据）：
 

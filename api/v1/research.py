@@ -52,7 +52,11 @@ def _to_request(request: ResearchRequest, user: dict[str, str]) -> AgentRequest:
         session_id=request.session_id,
         agent_type=AgentType.RESEARCH,
         user_message=request.message,
-        context=request.context,
+        context={
+            **request.context,
+            "department": user.get("department", "*"),
+            "role": user.get("role", "user"),
+        },
     )
 
 

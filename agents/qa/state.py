@@ -18,6 +18,8 @@ class QAState(TypedDict, total=False):
     # ── ② 请求上下文（Orchestrator 注入，节点只读）───────────────
     user_id: str  # 使用者 ID
     tenant_id: str  # 租户 ID（Milvus / DB 多租户隔离）
+    department: str  # 部门（细粒度权限：只能看本部门与全公司文档）
+    role: str  # 角色（user / admin，决定能看哪些 min_role 的文档）
     session_id: str  # 会话 ID（用于构造 thread_id）
     course_id: str | None  # 课程 ID，限制检索范围；None = 全库检索
 

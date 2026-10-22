@@ -81,6 +81,7 @@ def _encode(
     tenant_id: str,
     expires_seconds: int,
     settings: Settings,
+    department: str = "*",
 ) -> tuple[str, str]:
     """统一签发入口，返回 (token, jti)。"""
     now = datetime.now(UTC)
@@ -91,6 +92,7 @@ def _encode(
         "jti": jti,  # 唯一 ID，吊销时按它拉黑
         "role": role,
         "tenant_id": tenant_id,
+        "department": department,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=expires_seconds)).timestamp()),
     }
@@ -103,11 +105,12 @@ def create_access_token(
     tenant_id: str = "tenant_default",
     settings: Settings | None = None,
     expires_minutes: int | None = None,
+    department: str = "*",
 ) -> tuple[str, int]:
     """短效访问令牌，返回 (token, 有效期秒数)。"""
     s = settings or get_settings()
     minutes = expires_minutes or s.jwt_access_token_expire_minutes
-    token, _ = _encode(user_id, "access", role, tenant_id, minutes * 60, s)
+    token, _ = _encode(user_id, "access", role, tenant_id, minutes * 60, s, department)
     return token, minutes * 60
 
 
@@ -117,11 +120,12 @@ def create_refresh_token(
     tenant_id: str = "tenant_default",
     settings: Settings | None = None,
     expires_days: int | None = None,
+    department: str = "*",
 ) -> tuple[str, str]:
     """长效刷新令牌，返回 (token, jti)。"""
     s = settings or get_settings()
     days = expires_days or s.jwt_refresh_token_expire_days
-    return _encode(user_id, "refresh", role, tenant_id, days * 86400, s)
+    return _encode(user_id, "refresh", role, tenant_id, days * 86400, s, department)
 
 
 def decode_token(

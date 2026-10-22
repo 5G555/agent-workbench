@@ -24,11 +24,16 @@ _bearer = HTTPBearer(auto_error=False)
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict[str, str]:
-    """解析 Bearer Token，返回 {"user_id", "role", "tenant_id"}。"""
+    """解析 Bearer Token，返回 {"user_id", "role", "tenant_id", "department"}。"""
     s = get_settings()
 
     if not s.auth_enabled:  # 本地调试模式：不校验，直接用匿名身份
-        return {"user_id": "anonymous", "role": "dev", "tenant_id": s.default_tenant_id}
+        return {
+            "user_id": "anonymous",
+            "role": "dev",
+            "tenant_id": s.default_tenant_id,
+            "department": "*",
+        }
 
     unauthorized = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,6 +53,7 @@ async def get_current_user(
         "user_id": str(payload["sub"]),
         "role": str(payload.get("role", "user")),
         "tenant_id": str(payload.get("tenant_id", s.default_tenant_id)),
+        "department": str(payload.get("department", "*")),
     }
     # 绑进日志上下文：同一次请求的所有日志都会带上 trace_id 和 user_id
     structlog.contextvars.bind_contextvars(user_id=user["user_id"])

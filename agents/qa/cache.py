@@ -109,14 +109,23 @@ def normalize(query: str) -> str:
     return re.sub(r"\s+", "", query).strip().lower()
 
 
-def answer_key(version: int, query: str, tenant_id: str = "") -> str:
-    """缓存键必须含租户：不同租户问同一句话，答案可能完全不同。"""
+def answer_key(
+    version: int,
+    query: str,
+    tenant_id: str = "",
+    department: str = "",
+    role: str = "",
+) -> str:
+    """缓存键必须含完整的权限范围：租户 + 部门 + 角色。
+
+    只带租户是不够的——财务部和销售部问同一句话，答案不该互相可见；
+    普通用户和管理员看到的文档也不同。少一个维度就是越权读缓存。
+    """
     digest = hashlib.md5(normalize(query).encode("utf-8"), usedforsecurity=False).hexdigest()
-    if tenant_id:
-        tenant_digest = hashlib.md5(tenant_id.encode("utf-8"), usedforsecurity=False).hexdigest()[
-            :16
-        ]
-        return f"{ANSWER_PREFIX}:v{version}:t{tenant_digest}:{digest}"
+    scope = f"{tenant_id}|{department}|{role}"
+    if tenant_id or department or role:
+        scope_digest = hashlib.md5(scope.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return f"{ANSWER_PREFIX}:v{version}:s{scope_digest}:{digest}"
     return f"{ANSWER_PREFIX}:v{version}:{digest}"
 
 
@@ -178,7 +187,9 @@ class AnswerCache:
         self.settings = settings or get_settings()
         self.ttl = self.settings.cache_ttl_seconds
 
-    async def get(self, query: str, tenant_id: str = "") -> dict[str, Any] | None:
+    async def get(
+        self, query: str, tenant_id: str = "", department: str = "", role: str = ""
+    ) -> dict[str, Any] | None:
         client = await get_redis(self.settings)
         if client is None:
             return None
@@ -186,7 +197,7 @@ class AnswerCache:
             version = await cache_version()
             if version == 0:
                 return None
-            raw = await client.get(answer_key(version, query, tenant_id))
+            raw = await client.get(answer_key(version, query, tenant_id, department, role))
             if raw is None:
                 return None
             payload = json.loads(raw)
@@ -203,6 +214,8 @@ class AnswerCache:
         mode: str,
         sources: list[str] | None = None,
         tenant_id: str = "",
+        department: str = "",
+        role: str = "",
     ) -> None:
         client = await get_redis(self.settings)
         if client is None or not answer:
@@ -218,7 +231,7 @@ class AnswerCache:
                 "ts": int(time.time()),
             }
             await client.set(
-                answer_key(version, query, tenant_id),
+                answer_key(version, query, tenant_id, department, role),
                 json.dumps(payload, ensure_ascii=False),
                 ex=self.ttl,
             )

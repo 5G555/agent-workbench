@@ -22,9 +22,12 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT         NOT NULL,
     role          VARCHAR(16)  NOT NULL DEFAULT 'user',
     tenant_id     VARCHAR(64)  NOT NULL DEFAULT 'tenant_default',
+    department    VARCHAR(64)  NOT NULL DEFAULT '*',
     is_active     BOOLEAN      NOT NULL DEFAULT true,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+-- 迁移：细粒度权限引入部门维度，老表补列。'*' 表示全公司可见
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(64) NOT NULL DEFAULT '*';
 """
 
 
@@ -55,6 +58,7 @@ class UserStore:
         password: str,
         role: str = "user",
         tenant_id: str = "tenant_default",
+        department: str = "*",
     ) -> dict | None:
         """建账号；用户名已存在返回 None。哈希是 CPU 密集操作，丢线程池。"""
         await self.ensure_table()
@@ -63,22 +67,23 @@ class UserStore:
         try:
             row = await conn.fetchrow(
                 """
-                INSERT INTO users (username, password_hash, role, tenant_id)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO users (username, password_hash, role, tenant_id, department)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (username) DO NOTHING
-                RETURNING id, username, role, tenant_id
+                RETURNING id, username, role, tenant_id, department
                 """,
                 username,
                 password_hash,
                 role,
                 tenant_id,
+                department,
             )
         finally:
             await conn.close()
         if row is None:
             logger.info("users.create_conflict", username=username)
             return None
-        logger.info("users.created", username=username, role=role)
+        logger.info("users.created", username=username, role=role, department=department)
         return dict(row)
 
     async def get_by_username(self, username: str) -> dict | None:
@@ -88,7 +93,7 @@ class UserStore:
         try:
             row = await conn.fetchrow(
                 """
-                SELECT id, username, password_hash, role, tenant_id, is_active
+                SELECT id, username, password_hash, role, tenant_id, department, is_active
                 FROM users WHERE username = $1 LIMIT 1
                 """,
                 username,

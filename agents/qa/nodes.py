@@ -24,7 +24,7 @@ from agents.qa.prompts import (
     STRATEGY_USER,
 )
 from agents.qa.retrieval.strategies import ALL_STRATEGIES, DIRECT, run_strategy
-from agents.qa.retrieval.vector_store import get_vector_store
+from agents.qa.retrieval.vector_store import RetrievalScope, get_vector_store
 from agents.qa.state import QAState
 from config import get_settings
 from core.llm_factory import LLMFactory
@@ -117,6 +117,15 @@ def _tenant(state: QAState) -> str:
     return str(state.get("tenant_id") or get_settings().default_tenant_id)
 
 
+def _scope(state: QAState) -> RetrievalScope:
+    """把请求里的租户 / 部门 / 角色收成检索范围对象。"""
+    return RetrievalScope(
+        tenant_id=_tenant(state),
+        department=str(state.get("department") or "*"),
+        role=str(state.get("role") or "user"),
+    )
+
+
 def _is_first_turn(state: QAState) -> bool:
     """本轮是不是会话的第一问（没有任何历史）。
 
@@ -138,7 +147,12 @@ async def cache_lookup_node(state: QAState) -> dict[str, Any]:
     if not _is_first_turn(state):  # 多轮上下文里的问题不做缓存读取
         return {"cache_hit": False, "original_query": query}
 
-    hit = await get_answer_cache().get(query, _tenant(state))
+    hit = await get_answer_cache().get(
+        query,
+        _tenant(state),
+        str(state.get("department") or "*"),
+        str(state.get("role") or "user"),
+    )
     if hit is None:
         return {"cache_hit": False, "original_query": query}
 
@@ -284,7 +298,7 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
     source_filter = state.get("source") or None  # 前端可传 source 限定学科/来源
 
     store = get_vector_store()
-    docs = await run_strategy(store, strategy, query, _tenant(state), source_filter=source_filter)
+    docs = await run_strategy(store, strategy, query, _scope(state), source_filter=source_filter)
 
     # 精排分数过低的一律丢掉：检索"总能"返回几条，但那几条可能跟问题毫无关系，
     # 硬塞给模型只会得到一段编造的答案。阈值见 config.retrieval_min_score。

@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agents.qa.history import get_history_store
-from agents.qa.retrieval.vector_store import get_vector_store
+from agents.qa.retrieval.vector_store import RetrievalScope, get_vector_store
 from api.deps import get_current_user, rate_limit
 from core.logger import get_logger
 from core.orchestrator import AgentRequest, AgentResponse, AgentType, get_orchestrator
@@ -72,7 +72,12 @@ def _to_agent_request(request: AskRequest, user: dict[str, str]) -> AgentRequest
         session_id=request.session_id,
         agent_type=AgentType.QA,
         user_message=request.message,
-        context={**request.context, "source": request.source},
+        context={
+            **request.context,
+            "source": request.source,
+            "department": user.get("department", "*"),
+            "role": user.get("role", "user"),
+        },
     )
 
 
@@ -256,12 +261,17 @@ async def feedback_stats(
 
 @router.get("/sources", response_model=list[str], summary="可用的检索来源")
 async def list_sources(user: dict[str, str] = Depends(get_current_user)) -> list[str]:
-    """只列当前租户自己的来源，不暴露别家文档名。"""
+    """只列当前用户有权看到的来源：租户 + 部门 + 角色三重过滤。"""
     try:
         store = get_vector_store()
+        scope = RetrievalScope(
+            tenant_id=user["tenant_id"],
+            department=user.get("department", "*"),
+            role=user.get("role", "user"),
+        )
         rows = store.client.query(
             collection_name=store.collection_name,
-            filter=f'source != "" and tenant_id == "{user["tenant_id"]}"',
+            filter=f'source != "" and {scope.filter_expr()}',
             output_fields=["source"],
             limit=1000,
         )
