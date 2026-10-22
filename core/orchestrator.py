@@ -121,6 +121,47 @@ class Orchestrator:
 
         return self._agent_graphs[agent_type]  # 返回（缓存的）编译图
 
+    async def handle_auto(self, request: AgentRequest) -> AgentResponse:
+        """自动模式：先路由，再执行；qa 答不出来时升级到 research。
+
+        这是"两个 Agent 协作"的入口：
+            1. supervisor 判断该走哪个 Agent
+            2. qa 返回 no_result（查过知识库但没查到）→ 用同一个问题转 research
+            3. 返回时在 metadata 里标明路由与升级情况，方便排查
+        """
+        from agents.supervisor.router import needs_escalation, route
+
+        decision = await route(request.user_message)
+        target = AgentType(decision.agent)
+        routed_request = request.model_copy(update={"agent_type": target})
+        if target == AgentType.QA:
+            # 让 qa 内部跳过二次分类，避免两个模型判断冲突
+            routed_request.context["force_professional"] = True
+
+        result = await self._run_single_agent(routed_request)
+        result.metadata["route"] = {
+            "agent": decision.agent,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+        }
+
+        answer_mode = (result.structured or {}).get("answer_mode")
+        if target == AgentType.QA and needs_escalation(answer_mode):
+            logger.info("orchestrator.escalating", from_agent="qa", to_agent="research")
+            research_request = request.model_copy(update={"agent_type": AgentType.RESEARCH})
+            escalated = await self._run_single_agent(research_request)
+            if escalated.success and escalated.content:
+                escalated.content = (
+                    f"{result.content}\n\n---\n\n"
+                    f"知识库没有相关资料，以下是联网检索的结果：\n\n{escalated.content}"
+                )
+                escalated.metadata["escalated_from"] = "qa"
+                escalated.metadata["route"] = result.metadata["route"]
+                return escalated
+            logger.warning("orchestrator.escalation_failed", error=escalated.error_msg)
+
+        return result
+
     async def handle(self, request: AgentRequest) -> AgentResponse:
         """
         统一请求处理入口。
@@ -224,6 +265,47 @@ class Orchestrator:
                         "sources": update.get("sources") or [],
                         "mode": update.get("answer_mode"),
                     }
+
+    async def stream_auto(self, request: AgentRequest) -> AsyncIterator[dict[str, Any]]:
+        """自动模式的流式执行：先推路由结果，再流式跑对应 Agent，必要时升级。
+
+        事件序列：
+            {"type": "route", ...}           选了哪个 Agent、理由
+            ...被选 Agent 的 node / token 事件...
+            {"type": "escalate", ...}        qa 没查到，转 research（仅此情况）
+            ...research 的 node / token 事件...
+        """
+        from agents.supervisor.router import needs_escalation, route
+
+        decision = await route(request.user_message)
+        yield {
+            "type": "route",
+            "agent": decision.agent,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+        }
+
+        target = AgentType(decision.agent)
+        routed_request = request.model_copy(update={"agent_type": target})
+        if target == AgentType.QA:
+            routed_request.context["force_professional"] = True
+
+        final_mode = ""
+        final_answer = ""
+        async for event in self.stream(routed_request):
+            if event["type"] == "done":
+                final_mode = str(event.get("mode") or "")
+                final_answer = str(event.get("answer") or "")
+            yield event
+
+        if target == AgentType.QA and needs_escalation(final_mode):
+            logger.info("orchestrator.stream_escalating", to_agent="research")
+            yield {"type": "escalate", "from": "qa", "to": "research", "reason": "知识库无结果"}
+            research_request = request.model_copy(update={"agent_type": AgentType.RESEARCH})
+            async for event in self.stream(research_request):
+                yield event
+        elif final_answer:
+            yield {"type": "final", "answer": final_answer, "mode": final_mode}
 
     async def _run_single_agent(self, request: AgentRequest) -> AgentResponse:
         """

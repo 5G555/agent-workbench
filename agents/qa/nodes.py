@@ -26,6 +26,7 @@ from agents.qa.prompts import (
 from agents.qa.retrieval.strategies import ALL_STRATEGIES, DIRECT, run_strategy
 from agents.qa.retrieval.vector_store import get_vector_store
 from agents.qa.state import QAState
+from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
 
@@ -76,7 +77,7 @@ _topics_cache: tuple[float, str] | None = None
 _TOPICS_TTL = 300.0
 
 
-async def _kb_topics() -> str:
+async def kb_topics() -> str:
     """从 Milvus 取当前所有文档来源，作为分类提示词的"知识库范围"。
 
     写死主题清单会随知识库增长而过时（新增值班手册后，"交接班要求"就会被误判成
@@ -176,6 +177,12 @@ async def classify_node(state: QAState) -> dict[str, Any]:
     if not query:
         return {"query_type": "GENERAL", "original_query": ""}
 
+    # supervisor 已经判过"这是内部问题"时，不再让本节点的分类器推翻它：
+    # 两个模型各判一次，冲突时以路由结论为准，否则会出现"路由到 qa 却被当闲聊"。
+    if state.get("force_professional"):
+        logger.info("qa.classified", query=query, category="PROFESSIONAL", via="supervisor")
+        return {"query_type": "PROFESSIONAL", "original_query": query}
+
     category = ""
     classifier = get_classifier()
     if classifier is not None:
@@ -198,7 +205,7 @@ async def classify_node(state: QAState) -> dict[str, Any]:
                 [
                     SystemMessage(content=CLASSIFY_SYSTEM),
                     HumanMessage(
-                        content=CLASSIFY_USER.format(query=query, topics=await _kb_topics())
+                        content=CLASSIFY_USER.format(query=query, topics=await kb_topics())
                     ),
                 ]
             )
@@ -270,17 +277,37 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
     store = get_vector_store()
     docs = await run_strategy(store, strategy, query, source_filter=source_filter)
 
+    # 精排分数过低的一律丢掉：检索"总能"返回几条，但那几条可能跟问题毫无关系，
+    # 硬塞给模型只会得到一段编造的答案。阈值见 config.retrieval_min_score。
+    threshold = get_settings().retrieval_min_score
+    kept = [d for d in docs if float(d.metadata.get("rerank_score", 0.0)) >= threshold]
+    dropped = len(docs) - len(kept)
+
     chunks = [
         {
             "content": doc.page_content,
             "source": doc.metadata.get("source"),
             "parent_id": doc.metadata.get("parent_id"),
+            "score": round(float(doc.metadata.get("rerank_score", 0.0)), 4),
         }
-        for doc in docs
+        for doc in kept
     ]
     sources = sorted({str(c["source"]) for c in chunks if c["source"]})
-    logger.info("qa.retrieved", query=query, strategy=strategy, chunks=len(chunks))
-    return {"ranked_chunks": chunks, "sources": sources}
+    confidence = round(float(kept[0].metadata.get("rerank_score", 0.0)), 4) if kept else 0.0
+    logger.info(
+        "qa.retrieved",
+        query=query,
+        strategy=strategy,
+        chunks=len(chunks),
+        dropped=dropped,
+        confidence=confidence,
+    )
+    return {
+        "ranked_chunks": chunks,
+        "sources": sources,
+        "confidence": confidence,
+        "is_high_confidence": confidence >= 0.6,
+    }
 
 
 async def _stream_or_invoke(llm: Any, messages: list[Any]) -> str:
@@ -310,11 +337,25 @@ async def _stream_or_invoke(llm: Any, messages: list[Any]) -> str:
 
 
 async def generate_node(state: QAState) -> dict[str, Any]:
-    """④ 基于检索结果生成答案。"""
+    """④ 基于检索结果生成答案。
+
+    检索为空时不再"对着占位符硬答"——那会让模型编一段看似合理的通用答案。
+    直接返回 no_result，交给上层决定是换策略还是升级到联网研究。
+    """
     query = state.get("original_query", "")
     chunks = state.get("ranked_chunks") or []
-    context = "\n\n".join(str(c["content"]) for c in chunks) if chunks else ""
 
+    if not chunks:
+        message = "知识库中没找到与这个问题相关的内容。"
+        logger.info("qa.no_result", query=query, strategy=state.get("retrieval_strategy"))
+        return {
+            "answer": message,
+            "answer_mode": "no_result",
+            "messages": [AIMessage(content=message)],
+            "structured_output": {"answer_mode": "no_result", "sources": [], "no_result": True},
+        }
+
+    context = "\n\n".join(str(c["content"]) for c in chunks)
     llm = LLMFactory.get_llm("qa", temperature=0.2)
     answer = await _stream_or_invoke(
         llm,
@@ -322,7 +363,7 @@ async def generate_node(state: QAState) -> dict[str, Any]:
             SystemMessage(content=RAG_SYSTEM),
             HumanMessage(
                 content=RAG_USER.format(
-                    context=context or "（知识库未检索到相关内容）",
+                    context=context,
                     history=_history_text(state.get("messages")),
                     question=query,
                 )

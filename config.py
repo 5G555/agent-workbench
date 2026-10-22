@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # 父块过大会让"一篇文档=一个父块"，命中后带进来的上下文过于宽泛。
     retrieval_k: int = 5  # 混合检索召回条数
     candidate_m: int = 3  # 精排后最终送给 LLM 的文档数
+    # 精排分数低于此值的片段直接丢弃（实测：相关问题 top1 ≥0.80，无关问题 ≤0.01）。
+    # 全被丢掉时 generate 返回 no_result，自动模式据此升级到联网研究。
+    retrieval_min_score: float = 0.30
     parent_chunk_size: int = 600  # 父块：给 LLM 看的上下文
     child_chunk_size: int = 200  # 子块：用来算向量的检索单元
     chunk_overlap: int = 50  # 相邻块重叠字符数

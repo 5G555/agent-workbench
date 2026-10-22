@@ -90,6 +90,9 @@
   .tag.faq { background: var(--faq); }
   .tag.rag { background: var(--rag); }
   .tag.llm_direct { background: var(--direct); }
+  .tag.web { background: var(--rag); }
+  .tag.no_result { background: #6b6b6b; }
+  .note { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .sources { margin-top: 10px; font-size: 12px; color: var(--muted); }
   .sources span { display: inline-block; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; margin: 2px 4px 0 0; }
   .tools { margin-top: 8px; display: flex; gap: 10px; opacity: 0; transition: opacity .15s; }
@@ -167,6 +170,7 @@
     <span class="meta" id="meta">连接中…</span>
     <span class="spacer"></span>
     <select id="mode" title="回答模式">
+      <option value="auto">自动（推荐）</option>
       <option value="qa">知识库问答</option>
       <option value="research">联网研究</option>
     </select>
@@ -361,14 +365,23 @@ function addRow(role, text, streaming_) {
   return bubble;
 }
 
-function renderMeta(bubble, mode, sources) {
-  bubble.querySelectorAll(".tag, .sources, .tools").forEach(n => n.remove());
-  const labels = { faq: "FAQ 命中", rag: "知识库检索", llm_direct: "直接回答" };
+function renderMeta(bubble, mode, sources, note) {
+  bubble.querySelectorAll(".tag, .sources, .tools, .note").forEach(n => n.remove());
+  const labels = {
+    faq: "FAQ 命中", rag: "知识库检索", llm_direct: "直接回答",
+    web: "联网检索", no_result: "未找到",
+  };
   if (mode) {
     const tag = document.createElement("div");
     tag.className = "tag " + mode;
     tag.textContent = labels[mode] || mode;
     bubble.prepend(tag);
+  }
+  if (note) {
+    const n = document.createElement("div");
+    n.className = "note";
+    n.textContent = note;
+    bubble.insertBefore(n, mode ? bubble.children[1] || null : bubble.firstChild);
   }
   if (sources && sources.length) {
     const box = document.createElement("div");
@@ -510,18 +523,21 @@ function startNewSession() {
 // ── 提问 ───────────────────────────────────────────────
 async function askStream(message, bubble) {
   abortCtl = new AbortController();
-  const base = modeSel.value === "research" ? API_RESEARCH : API;
+  const mode = modeSel.value;
+  const base = mode === "auto" ? "/api/v1" : (mode === "research" ? API_RESEARCH : API);
+  const body = { session_id: currentSession, message, source: sourceSel.value || null };
+  if (mode === "auto") body.mode = "auto";
   const res = await apiFetch(`${base}/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
+    body: JSON.stringify(body),
     signal: abortCtl.signal,
   });
   if (!res.body) throw new Error("浏览器不支持流式响应");
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "", answer = "", mode = "", sources = [];
+  let buffer = "", answer = "", answerMode = "", sources = [], note = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -540,7 +556,15 @@ async function askStream(message, bubble) {
         bubble.innerHTML = renderMarkdown(answer);
         chat.scrollTop = chat.scrollHeight;
       } else if (ev.type === "done") {
-        mode = ev.mode || ""; sources = ev.sources || [];
+        answerMode = ev.mode || answerMode; sources = ev.sources || sources;
+        if (ev.answer && !answer) answer = ev.answer;
+      } else if (ev.type === "route") {
+        note = "自动路由 → " + ev.agent + (ev.reason ? "：" + ev.reason : "");
+      } else if (ev.type === "escalate") {
+        note = "知识库未命中，已转联网检索";
+        answer = "";
+      } else if (ev.type === "final") {
+        answerMode = ev.mode || answerMode;
         if (ev.answer && !answer) answer = ev.answer;
       } else if (ev.type === "error") {
         answer += `\n\n[出错] ${ev.message}`;
@@ -549,19 +573,27 @@ async function askStream(message, bubble) {
   }
   bubble.classList.remove("cursor");
   bubble.innerHTML = renderMarkdown(answer);
-  renderMeta(bubble, mode, sources);
+  renderMeta(bubble, answerMode, sources, note);
 }
 
 async function askOnce(message, bubble) {
-  const base = modeSel.value === "research" ? API_RESEARCH : API;
+  const mode = modeSel.value;
+  const base = mode === "auto" ? "/api/v1" : (mode === "research" ? API_RESEARCH : API);
+  const body = { session_id: currentSession, message, source: sourceSel.value || null };
+  if (mode === "auto") body.mode = "auto";
   const res = await apiFetch(`${base}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   bubble.innerHTML = renderMarkdown(data.answer || data.error_msg || "（无回答）");
-  renderMeta(bubble, data.structured && data.structured.answer_mode, data.sources || []);
+  // /api/v1/ask 返回扁平结构，/v1/qa 返回 {structured:{answer_mode}}
+  const answerMode = data.answer_mode || (data.structured && data.structured.answer_mode) || "";
+  let note = "";
+  if (data.escalated) note = "知识库未命中，已转联网检索";
+  else if (data.route && data.route.agent) note = "自动路由 → " + data.route.agent;
+  renderMeta(bubble, answerMode, data.sources || [], note);
 }
 
 async function send() {

@@ -132,7 +132,30 @@ WEB_SEARCH_MCP_URL=http://127.0.0.1:8765/mcp
 python -c "import asyncio; from langchain_mcp_adapters.client import MultiServerMCPClient as M; print(asyncio.run(M({'ws':{'url':'http://127.0.0.1:8765/mcp','transport':'streamable_http'}}).get_tools()))"
 ```
 
-网页前端顶部有模式切换：**知识库问答** / **联网研究**。两者共用同一张会话表，切换不丢上下文。
+网页前端顶部有模式切换：**自动（推荐）** / **知识库问答** / **联网研究**。三者共用同一张会话表，切换不丢上下文。
+
+### 自动路由与失败升级
+
+`POST /api/v1/ask` 走的是 supervisor：
+
+```
+问题 → supervisor 判断
+        ├─ 内部主题 → qa ─┬─ 查到（faq/rag）→ 直接返回
+        │                  └─ 查不到（no_result）→ 升级 research
+        └─ 外部主题 ────────→ research
+```
+
+两个细节：
+
+- **路由结论优先**：supervisor 判成"内部问题"后，qa 内部跳过二次分类（`force_professional`），避免两个模型判断打架。
+- **升级的判据是精排分数**：`RETRIEVAL_MIN_SCORE`（默认 0.30）以下的片段直接丢弃；丢空就返回 `no_result`，由编排器转 research。实测相关问题 top1 ≥0.80、无关问题 ≤0.01，阈值有足够余量。
+
+**改了检索逻辑记得 bump 缓存版本**，否则旧答案还会被命中：
+
+```powershell
+python -c "import asyncio; from agents.qa.cache import bump_cache_version; print(asyncio.run(bump_cache_version()))"
+```
+
 
 
 ## 排错

@@ -195,6 +195,9 @@ class VectorStore:
 
         pairs = [[query, doc.page_content] for doc in parent_docs]
         scores = self.reranker.predict(pairs, show_progress_bar=False)
+        # 把精排分数写回 metadata：上层要据此判断"召回到的东西到底相不相关"
+        for score, doc in zip(scores, parent_docs, strict=False):
+            doc.metadata["rerank_score"] = float(score)
         ranked = [doc for _, doc in sorted(zip(scores, parent_docs, strict=False), reverse=True)]
         logger.info(
             "vector_store.search_done",
@@ -202,6 +205,7 @@ class VectorStore:
             hits=len(hits),
             parents=len(parent_docs),
             returned=len(ranked[: self.settings.candidate_m]),
+            top_score=round(float(max(scores)) if len(scores) else 0.0, 3),
         )
         return ranked[: self.settings.candidate_m]
 

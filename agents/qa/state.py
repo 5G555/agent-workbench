@@ -24,6 +24,9 @@ class QAState(TypedDict, total=False):
     # ── ③ Query 处理中间结果──────────────────────────────────────
     original_query: str  # 用户原始输入，全程不变
     query_type: str  # GENERAL（通用知识） / PROFESSIONAL（专业咨询）
+    # supervisor 路由到 qa 时置 True：跳过本节点分类，直接走知识库，
+    # 避免"路由判了内部问题、分类器又判成闲聊"的互相矛盾
+    force_professional: bool
     retrieval_strategy: str  # 直接检索 / 假设问题检索 / 子查询检索 / 回溯问题检索
     rewritten_queries: list[str]  # BROAD 分支：Multi-Query 改写后的子 Query 列表
     hyde_document: str | None  # VAGUE 分支：HyDE 生成的假设文档文本
