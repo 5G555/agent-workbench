@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from agents.qa.cache import (
     ANSWER_PREFIX,
@@ -73,6 +74,8 @@ class CleanupReport:
     applied: bool = False
     scans: list[PatternScan] = field(default_factory=list)
     deleted: int = 0
+    # 删除前把键值备份到 Redis 的哪个回收区（可据此恢复）
+    backup_id: str = ""
 
     @property
     def stale_total(self) -> int:
@@ -100,8 +103,83 @@ async def scan(pattern: str, current: int) -> PatternScan:
     return result
 
 
+TRASH_PREFIX = "cache:trash"
+TRASH_TTL_SECONDS = 7 * 86400
+
+
+async def _backup_keys(keys: list[str], version: int) -> str:
+    """删除前把键值备份到 Redis 回收区，返回 backup_id（失败返回空串）。
+
+    为什么要备份：
+        缓存键虽然"能重新生成"，但重新生成意味着一次完整检索 + 一次模型调用，
+        既花钱又变慢。备份成本几乎为零（同机 HSET），却能一键恢复。
+    """
+    client = await get_redis()
+    if client is None or not keys:
+        return ""
+
+    backup_id = f"v{version}-{int(datetime.now(UTC).timestamp())}"
+    mapping: dict[str, str] = {}
+    for key in keys:
+        try:
+            value = await client.get(key)
+        except Exception:
+            value = None
+        if value is not None:
+            mapping[key] = value if isinstance(value, str) else str(value)
+    if not mapping:
+        return ""
+
+    try:
+        # 注意：本项目用的 redis-py 5.3.1 上 hset(mapping=...) 会报
+        # "wrong number of arguments for 'hset' command"，只能用 field/value 形式
+        for field, value in mapping.items():
+            await client.hset(f"{TRASH_PREFIX}:{backup_id}", field, value)  # type: ignore[misc]
+        await client.expire(f"{TRASH_PREFIX}:{backup_id}", TRASH_TTL_SECONDS)  # type: ignore[misc]
+    except Exception as exc:
+        logger.error("cache.backup_failed", error=str(exc))
+        return ""
+    logger.info("cache.backed_up", backup_id=backup_id, keys=len(mapping))
+    return backup_id
+
+
+async def restore_backup(backup_id: str) -> tuple[bool, int]:
+    """从备份恢复键，返回 (是否成功, 恢复条数)。"""
+    client = await get_redis()
+    if client is None:
+        return False, 0
+
+    try:
+        # 同上：redis-py 的异步签名在类型上不可见
+        data = await client.hgetall(f"{TRASH_PREFIX}:{backup_id}")  # type: ignore[misc]
+    except Exception as exc:
+        logger.error("cache.restore_failed", error=str(exc))
+        return False, 0
+    if not data:
+        return False, 0
+
+    mapping = {
+        (k if isinstance(k, str) else k.decode()): (v if isinstance(v, str) else v.decode())
+        for k, v in data.items()
+    }
+    await client.mset(mapping)  # type: ignore[misc]
+    logger.info("cache.restored", backup_id=backup_id, keys=len(mapping))
+    return True, len(mapping)
+
+
+async def list_backups() -> list[str]:
+    client = await get_redis()
+    if client is None:
+        return []
+    ids: list[str] = []
+    async for raw in client.scan_iter(match=f"{TRASH_PREFIX}:*", count=100):
+        key = raw if isinstance(raw, str) else raw.decode()
+        ids.append(key.split(":", 2)[-1])
+    return ids
+
+
 async def clean(apply: bool = False) -> CleanupReport:
-    """巡检并按需删除旧版本键；apply=False 时只统计。"""
+    """巡检并按需删除旧版本键；apply=True 时**先备份再删**。"""
     current = await cache_version()
     report = CleanupReport(version=current, applied=apply)
     if current == 0:
@@ -112,12 +190,25 @@ async def clean(apply: bool = False) -> CleanupReport:
         return report
 
     for pattern in PATTERNS:
-        result = await scan(pattern, current)
-        report.scans.append(result)
-        if apply and result.stale:
-            for i in range(0, len(result.stale), BATCH_SIZE):
-                await client.delete(*result.stale[i : i + BATCH_SIZE])
-            report.deleted += len(result.stale)
+        report.scans.append(await scan(pattern, current))
+
+    if not apply:
+        return report
+
+    stale_keys = [key for scan_result in report.scans for key in scan_result.stale]
+    if not stale_keys:
+        return report
+
+    # 先备份；备份失败就一个都不删（Fail-Closed：宁可留垃圾，也不做不可恢复的删除）
+    backup_id = await _backup_keys(stale_keys, current)
+    if not backup_id:
+        logger.error("cache.clean_aborted", reason="备份失败", keys=len(stale_keys))
+        return report
+    report.backup_id = backup_id
+
+    for i in range(0, len(stale_keys), BATCH_SIZE):
+        await client.delete(*stale_keys[i : i + BATCH_SIZE])
+        report.deleted += len(stale_keys[i : i + BATCH_SIZE])
 
     logger.info(
         "cache.clean_report",
@@ -125,7 +216,7 @@ async def clean(apply: bool = False) -> CleanupReport:
         stale=report.stale_total,
         kept=report.kept_total,
         deleted=report.deleted,
-        applied=apply,
+        backup=backup_id,
     )
     return report
 

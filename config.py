@@ -153,6 +153,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     default_tenant_id: str = "tenant_default"
 
+    # ── 破坏性操作的安全护栏 ──
+    # 删除类操作必须过：策略分级 → 审批（高风险）→ 幂等 → 预算 → 快照 → 验证
+    # 预算：单租户每小时允许执行的删除次数（0 = 不限，不建议）
+    ops_delete_budget_per_hour: int = 10
+    # 审批票据有效期（秒），过期作废
+    ops_approval_ttl_seconds: int = 900
+    # 是否允许发起人自己审批自己的删除请求（小团队可放开，生产建议关）
+    ops_allow_self_approval: bool = False
+    # 回收站保留天数：超过这个天数的才允许 purge（真删）
+    ops_trash_retention_days: int = 7
+
 
 @lru_cache
 def get_settings() -> Settings:

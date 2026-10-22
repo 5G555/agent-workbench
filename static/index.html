@@ -1090,36 +1090,87 @@ async function cleanCache() {
     showToast(`没有旧版本残留（当前 v${first.version}，${first.kept} 个键都是当前版本）`);
     return;
   }
-  const ok = confirm(
-    `将删除 ${first.stale} 个旧版本键，保留当前版本 ${first.kept} 个。\n\n继续？`
-  );
-  if (!ok) return;
+  if (!confirm(`将清理 ${first.stale} 个旧版本键（会先备份，可恢复）。\n\n继续？`)) return;
 
-  const done = await apiFetch("/api/v1/ops/cache/clean", {
+  let res = await apiFetch("/api/v1/ops/cache/clean", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ apply: true }),
   }).then((r) => r.json());
-  showToast(`已删除 ${done.deleted} 个旧版本键（当前版本 v${done.version} 保留 ${done.kept} 个）`);
+
+  // 高风险操作要求审批：拿到票据 → 管理员确认 → 带票据重试
+  if (res.status === "needs_approval") {
+    res = await approveAndRetry(res, "/api/v1/ops/cache/clean", { apply: true });
+    if (!res) return;
+  }
+  if (res.status === "blocked") {
+    showToast("已阻断：" + res.message, true);
+    return;
+  }
+  const d = res.data || {};
+  showToast(
+    `已清理 ${d.deleted ?? 0} 个旧版本键（当前版本保留 ${d.kept ?? "-"} 个）` +
+    (d.backup_id ? `\n备份 ID：${d.backup_id}（可在运维区恢复）` : "")
+  );
   loadOps();
+}
+
+// 审批 → 带票据重试。审批是权限动作，只有管理员能批。
+async function approveAndRetry(needs, url, body) {
+  const approval = needs.approval || {};
+  const id = approval.approval_id;
+  const info =
+    `该操作需要审批\n\n` +
+    `票据：${id}\n` +
+    `影响：${approval.impact || "-"}\n` +
+    `可逆性：${approval.reversible || "-"}\n\n` +
+    `作为管理员批准并执行？`;
+  if (!confirm(info)) {
+    showToast(`已取消。票据 ${id} 仍待审批（15 分钟内有效）`);
+    return null;
+  }
+
+  const confirmed = await apiFetch(`/api/v1/ops/approvals/${id}/confirm`, {
+    method: "POST",
+  }).then((r) => r.json());
+
+  if (!confirmed.ok) {
+    showToast("审批失败：" + (confirmed.message || (confirmed.detail ?? "无权限")), true);
+    return null;
+  }
+  return apiFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, approval_token: id }),
+  }).then((r) => r.json());
 }
 
 async function cleanExports(apply) {
   const keep = Number(document.getElementById("keepN").value);
-  const data = await apiFetch("/api/v1/ops/exports/clean", {
+  const payload = { keep, apply };
+  let data = await apiFetch("/api/v1/ops/exports/clean", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keep, apply }),
+    body: JSON.stringify(payload),
   }).then((r) => r.json());
 
-  const list = (data.would_delete || data.deleted || []).join(", ");
+  if (data.status === "needs_approval") {
+    data = await approveAndRetry(data, "/api/v1/ops/exports/clean", payload);
+    if (!data) return;
+  }
+  if (data.status === "blocked") {
+    showToast("已阻断：" + data.message, true);
+    return;
+  }
+
+  const list = (data.would_delete || (data.data && data.data.deleted) || []).join(", ");
   if (apply) {
-    showToast(`已删除 ${(data.deleted || []).length} 个目录，释放 ${data.freed}`);
+    showToast(`已移入回收站：任务 ${list}，释放 ${data.data ? data.data.freed : "-"} 字节`);
     loadOps();
   } else if (!data.would_delete || !data.would_delete.length) {
     showToast("没有需要清理的目录");
   } else {
-    showToast(`预演：会删除任务 ${list}，释放约 ${data.freed}\n确认后点「执行清理」`);
+    showToast(`预演：会清理任务 ${list}，释放约 ${data.freed}\n确认后点「执行清理」`);
   }
 }
 

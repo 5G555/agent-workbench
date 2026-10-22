@@ -106,39 +106,41 @@ def plan_cleanup(
 
 
 def apply_cleanup(targets: list[ExportDir]) -> tuple[int, int]:
-    """真删，返回 (删掉的目录数, 释放字节数)。"""
-    import shutil
+    """执行清理：**移到回收站**，不是物理删除。
+
+    为什么改成软删除：
+        删文件是终态的，而导出目录随时能从库里重建——
+        没必要为了省几 MB 冒"删错且无法恢复"的风险。
+        真删（purge）是单独的、需要审批的操作（见 core/safety/trash.py）。
+
+    返回 (移走的目录数, 释放的字节数)。
+    """
+    from core.safety.trash import move_to_trash
 
     dirs = 0
     freed = 0
-    base = DEFAULT_ROOT.resolve()
-
     for item in targets:
-        resolved = item.path.resolve()
-        # 双保险：必须落在导出根目录下，且名字是数字
-        if base not in resolved.parents or not resolved.name.isdigit():
-            logger.warning("crawl_clean.skipped", path=str(resolved))
+        # 根目录取该目录的父级：targets 本身就是从某个根 scan 出来的，
+        # 这样测试用临时目录、线上用 data/crawl 都成立
+        moved = move_to_trash(item.task_id, item.path.parent)
+        if moved is None:
+            logger.warning("crawl_clean.skipped", task=item.task_id)
             continue
-        shutil.rmtree(resolved, ignore_errors=True)
         dirs += 1
-        freed += item.bytes
-        logger.info("crawl_clean.removed", task=item.task_id, path=str(resolved))
+        freed += moved.size
+        logger.info("crawl_clean.moved_to_trash", task=item.task_id, trash_id=moved.trash_id)
 
     return dirs, freed
 
 
 def clean_task(task_id: int, root: Path | str | None = None) -> tuple[bool, int]:
-    """删掉单个任务的导出目录，返回 (是否删了, 释放字节数)。"""
-    base = Path(root) if root else DEFAULT_ROOT
-    target = base / str(task_id)
-    if not target.is_dir():
-        return False, 0
-    total, _ = _dir_stats(target)
-    import shutil
+    """把单个任务的导出目录移进回收站，返回 (是否移了, 释放字节数)。"""
+    from core.safety.trash import move_to_trash
 
-    shutil.rmtree(target, ignore_errors=True)
-    logger.info("crawl_clean.removed", task=task_id, path=str(target))
-    return True, total
+    moved = move_to_trash(task_id, root)
+    if moved is None:
+        return False, 0
+    return True, moved.size
 
 
 async def clean_db_tasks(older_than_days: float, tenant_id: str | None = None) -> int:

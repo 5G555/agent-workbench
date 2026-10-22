@@ -54,6 +54,10 @@ def test_ops_mcp_server_registers_expected_tools():
         "clean_exports",
         "cache_stats",
         "clean_cache",
+        "list_trash",
+        "restore_exports",
+        "restore_cache",
+        "purge_trash",
     }
 
 
@@ -63,6 +67,6 @@ def test_clean_tool_is_dry_run_by_default():
 
     from mcp_servers import ops_server
 
-    signature = inspect.signature(ops_server.clean_exports)
-    # FastMCP 的 @mcp.tool() 保留原函数签名
-    assert signature.parameters["apply"].default is False
+    for tool_name in ("clean_exports", "clean_cache", "purge_trash"):
+        signature = inspect.signature(getattr(ops_server, tool_name))
+        assert signature.parameters["apply"].default is False, tool_name
