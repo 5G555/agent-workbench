@@ -115,6 +115,7 @@ def answer_key(
     tenant_id: str = "",
     department: str = "",
     role: str = "",
+    namespace: str = "",
 ) -> str:
     """缓存键必须含完整的权限范围：租户 + 部门 + 角色。
 
@@ -122,11 +123,12 @@ def answer_key(
     普通用户和管理员看到的文档也不同。少一个维度就是越权读缓存。
     """
     digest = hashlib.md5(normalize(query).encode("utf-8"), usedforsecurity=False).hexdigest()
+    prefix = f"{ANSWER_PREFIX}:{namespace}" if namespace else ANSWER_PREFIX
     scope = f"{tenant_id}|{department}|{role}"
     if tenant_id or department or role:
         scope_digest = hashlib.md5(scope.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
-        return f"{ANSWER_PREFIX}:v{version}:s{scope_digest}:{digest}"
-    return f"{ANSWER_PREFIX}:v{version}:{digest}"
+        return f"{prefix}:v{version}:s{scope_digest}:{digest}"
+    return f"{prefix}:v{version}:{digest}"
 
 
 async def save_faq_index(rows: list[list[str]], tokens: list[list[str]]) -> None:
@@ -188,7 +190,12 @@ class AnswerCache:
         self.ttl = self.settings.cache_ttl_seconds
 
     async def get(
-        self, query: str, tenant_id: str = "", department: str = "", role: str = ""
+        self,
+        query: str,
+        tenant_id: str = "",
+        department: str = "",
+        role: str = "",
+        namespace: str = "",
     ) -> dict[str, Any] | None:
         client = await get_redis(self.settings)
         if client is None:
@@ -197,11 +204,19 @@ class AnswerCache:
             version = await cache_version()
             if version == 0:
                 return None
-            raw = await client.get(answer_key(version, query, tenant_id, department, role))
+            raw = await client.get(
+                answer_key(version, query, tenant_id, department, role, namespace)
+            )
             if raw is None:
                 return None
             payload = json.loads(raw)
-            logger.info("cache.hit", query=query, mode=payload.get("mode"), version=version)
+            logger.info(
+                "cache.hit",
+                query=query,
+                mode=payload.get("mode"),
+                version=version,
+                namespace=namespace or "qa",
+            )
             return payload
         except Exception as exc:
             _degrade(exc)
@@ -216,6 +231,8 @@ class AnswerCache:
         tenant_id: str = "",
         department: str = "",
         role: str = "",
+        namespace: str = "",
+        ttl: int | None = None,
     ) -> None:
         client = await get_redis(self.settings)
         if client is None or not answer:
@@ -230,23 +247,31 @@ class AnswerCache:
                 "sources": sources or [],
                 "ts": int(time.time()),
             }
+            expire = ttl or self.ttl
             await client.set(
-                answer_key(version, query, tenant_id, department, role),
+                answer_key(version, query, tenant_id, department, role, namespace),
                 json.dumps(payload, ensure_ascii=False),
-                ex=self.ttl,
+                ex=expire,
             )
-            logger.info("cache.stored", query=query, mode=mode, ttl=self.ttl)
+            logger.info(
+                "cache.stored",
+                query=query,
+                mode=mode,
+                ttl=expire,
+                namespace=namespace or "qa",
+            )
         except Exception as exc:
             _degrade(exc)
 
     async def stats(self) -> dict[str, int]:
+        """统计当前版本的答案条数（qa 与 research 都算进去）。"""
         client = await get_redis(self.settings)
         if client is None:
             return {"version": 0, "answers": 0}
         try:
             version = await cache_version()
             count = 0
-            async for _ in client.scan_iter(match=f"{ANSWER_PREFIX}:v{version}:*", count=200):
+            async for _ in client.scan_iter(match=f"{ANSWER_PREFIX}:*:v{version}:*", count=200):
                 count += 1
             return {"version": version, "answers": count}
         except Exception as exc:

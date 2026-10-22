@@ -21,9 +21,11 @@ class ResearchState(TypedDict, total=False):
     # 对话消息（add_messages 会自动累加）
     messages: Annotated[list[BaseMessage], add_messages]
 
-    # 身份
+    # 身份（与 qa 一致，缓存键需要完整权限范围）
     user_id: str
     tenant_id: str
+    department: str
+    role: str
     session_id: str
 
     # 本轮问题
@@ -40,5 +42,6 @@ class ResearchState(TypedDict, total=False):
     answer_mode: str  # web / no_result
     sources: list[str]  # 结果标题（流式事件里展示）
     citations: list[str]  # 实际引用的 URL 列表
+    cache_hit: bool  # 是否命中联网答案缓存
     structured_output: dict  # 给 API 层用的聚合结构
     error: str

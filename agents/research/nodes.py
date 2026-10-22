@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from agents.qa.cache import get_answer_cache
 from agents.research.collector import collect_multi
 from agents.research.outcome import SearchOutcome, SearchStatus
 from agents.research.prompts import (
@@ -34,11 +35,21 @@ from core.streaming import stream_or_invoke
 
 logger = get_logger(__name__)
 
+# 联网答案在同一个 AnswerCache 里的命名空间，与 qa 的键彻底分开
+RESEARCH_NAMESPACE = "research"
+
 
 class Plan(BaseModel):
     """模型输出的检索计划。"""
 
     subqueries: list[str] = Field(default_factory=list)
+
+
+def _is_first_turn(state: ResearchState) -> bool:
+    """只有首轮才用缓存：多轮答案依赖上下文，缓存键里没有历史。"""
+    from agents.qa.nodes import _is_first_turn as qa_first_turn
+
+    return qa_first_turn(state)  # type: ignore[arg-type]
 
 
 def _extract_query(state: ResearchState) -> str:
@@ -50,6 +61,75 @@ def _extract_query(state: ResearchState) -> str:
         if isinstance(msg, HumanMessage):
             return str(msg.content)
     return ""
+
+
+async def cache_lookup_node(state: ResearchState) -> dict[str, Any]:
+    """⓪ 联网答案缓存：命中就跳过 plan/search/synthesize，省一次 Tavily 调用。
+
+    和 qa 共用同一个 AnswerCache，只是换命名空间（research）和更短的 TTL——
+    公网信息会变，缓存一整天容易答过时内容。
+    """
+    query = _extract_query(state)
+    if not query or not _is_first_turn(state):
+        return {"cache_hit": False}
+
+    hit = await get_answer_cache().get(
+        query,
+        str(state.get("tenant_id") or ""),
+        str(state.get("department") or "*"),
+        str(state.get("role") or "user"),
+        namespace=RESEARCH_NAMESPACE,
+    )
+    if hit is None:
+        return {"cache_hit": False}
+
+    answer = str(hit.get("answer") or "")
+    logger.info("research.cache_hit", query=query)
+    return {
+        "cache_hit": True,
+        "original_query": query,
+        "answer": answer,
+        "answer_mode": str(hit.get("mode") or "web"),
+        "sources": [str(s) for s in (hit.get("sources") or [])],
+        "messages": [AIMessage(content=answer)],
+        "structured_output": {
+            "answer_mode": str(hit.get("mode") or "web"),
+            "sources": hit.get("sources") or [],
+            "citations": hit.get("citations") or [],
+            "cached": True,
+        },
+    }
+
+
+async def cache_write_node(state: ResearchState) -> dict[str, Any]:
+    """④ 只缓存成功作答的结果。
+
+    没搜到 / 搜失败都不写缓存：前者可能是资料会变，后者是服务故障，
+    缓存下来会让后续几小时都误报。
+    """
+    if state.get("cache_hit"):
+        return {}
+    if str(state.get("answer_mode") or "") != "web":
+        return {}
+    query = str(state.get("original_query") or "")
+    answer = str(state.get("answer") or "")
+    if not query or not answer:
+        return {}
+
+    settings = get_settings()
+    await get_answer_cache().set(
+        query,
+        answer,
+        mode="web",
+        sources=state.get("sources") or [],
+        tenant_id=str(state.get("tenant_id") or ""),
+        department=str(state.get("department") or "*"),
+        role=str(state.get("role") or "user"),
+        namespace=RESEARCH_NAMESPACE,
+        ttl=settings.research_cache_ttl_seconds,
+    )
+    logger.info("research.cache_stored", query=query, ttl=settings.research_cache_ttl_seconds)
+    return {}
 
 
 async def plan_node(state: ResearchState) -> dict[str, Any]:

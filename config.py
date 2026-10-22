@@ -79,7 +79,9 @@ class Settings(BaseSettings):
     # Redis 挂了会自动降级为不缓存，不影响问答主流程。
     redis_url: str = "redis://localhost:6379/0"
     cache_enabled: bool = True
-    cache_ttl_seconds: int = 86400  # 答案缓存 24 小时
+    cache_ttl_seconds: int = 86400  # 知识库答案缓存 24 小时
+    # 联网答案单独设 TTL：公网信息会变，缓存太久会答过时内容
+    research_cache_ttl_seconds: int = 6 * 3600
 
     # ── 鉴权与限流 ──
     # auth_enabled=false 只用于本地调试，生产必须为 true

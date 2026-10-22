@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from agents.qa.cache import answer_key
 from agents.research.mcp_client import parse_mcp_payload
 from agents.research.tools import SearchResponse, SearchResult, dedup_results
 
@@ -64,3 +65,18 @@ def test_context_contains_index_and_url():
     assert text.startswith("[3] 标题")
     assert "http://x" in text
     assert "正文" in text
+
+
+# ── 缓存命名空间：qa 与 research 互不覆盖 ─────────────────
+def test_research_cache_namespace_differs_from_qa():
+    qa_key = answer_key(1, "同一个问题", "t1", "*", "user")
+    rs_key = answer_key(1, "同一个问题", "t1", "*", "user", namespace="research")
+    assert qa_key != rs_key
+    assert ":research:" in rs_key
+    assert ":research:" not in qa_key
+
+
+def test_research_cache_still_scoped_by_permission():
+    base = answer_key(1, "q", "t1", "一号部门", "user", namespace="research")
+    assert base != answer_key(1, "q", "t1", "二号部门", "user", namespace="research")
+    assert base != answer_key(1, "q", "t2", "一号部门", "user", namespace="research")
