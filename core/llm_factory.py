@@ -31,6 +31,7 @@ _HTTP_SYNC_CLIENT = httpx.Client(  # 同步客户端（给 invoke 用）
 _AGENT_MODEL_ROUTING: dict[str, str] = {
     "qa": "deepseek-chat",  # 智能问答
     "research": "deepseek-chat",  # 联网研究（拆子问题 + 汇总）
+    "crawler": "deepseek-chat",  # 网页采集（选链接 + 结果分析）
 }
 
 

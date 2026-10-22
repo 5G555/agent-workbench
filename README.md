@@ -108,6 +108,7 @@ pyright
 |---|---|---|
 | `qa` | 内部知识库（Milvus + FAQ + Redis 缓存） | `POST /api/v1/qa/ask` |
 | `research` | 公网（经 MCP 调 web_search 工具） | `POST /api/v1/research/ask` |
+| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
 
 **为什么 qa 不用 MCP**：它的检索是同进程内的函数调用，上 MCP 只会多一次网络往返和一个故障点。
 **为什么 research 用 MCP**：web 搜索是外部服务，且要被别的客户端复用，协议化才有价值。

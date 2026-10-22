@@ -33,6 +33,7 @@ class AgentType(StrEnum):
 
     QA = "qa"  # 智能问答（内部知识库）
     RESEARCH = "research"  # 联网研究（MCP 工具 + 多步检索）
+    CRAWLER = "crawler"  # 网页采集（抓正文落库，供数据分析使用）
 
 
 class AgentRequest(BaseModel):
@@ -112,6 +113,11 @@ class Orchestrator:
                 from agents.research.graph import build_research_graph
 
                 self._agent_graphs[agent_type] = build_research_graph()
+
+            elif agent_type == AgentType.CRAWLER:
+                from agents.crawler.graph import build_crawler_graph
+
+                self._agent_graphs[agent_type] = build_crawler_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")
@@ -279,6 +285,11 @@ class Orchestrator:
             # 显式带上本轮问题：checkpointer 会恢复上一轮的 original_query，
             # 不覆盖就会拿旧问题去查缓存/检索
             "original_query": request.user_message,
+            # 爬虫 Agent 的输入：抓什么、抓几个、是否指定 URL
+            "query": request.user_message,
+            "entry_url": request.context.get("entry_url") or "",
+            "max_pages": request.context.get("max_pages"),
+            "goal": request.context.get("goal") or request.user_message,
             "user_id": request.user_id,
             "tenant_id": request.tenant_id,
             # 细粒度权限：部门与角色随请求带进图，检索时用于拼过滤条件

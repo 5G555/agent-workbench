@@ -132,6 +132,8 @@ class Settings(BaseSettings):
     research_max_page_fetches: int = 2
     # 每租户每天的联网检索次数上限（0 = 不限）。先给足额度，需要收紧时改这里。
     web_daily_quota_per_tenant: int = 500
+    # 爬虫 Agent 单次最多抓几个页面（每页 1~3 秒，别开太大）
+    crawler_max_pages: int = 5
 
     # ── 应用基础配置 ──
     app_env: str = "local"
