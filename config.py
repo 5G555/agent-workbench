@@ -128,6 +128,8 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     research_max_subqueries: int = 3  # 一个问题最多拆成几个子查询
     research_results_per_query: int = 4  # 每个子查询取几条结果
+    # deep 模式下模型最多打开几个网页正文（每页 1~3 秒，别放开）
+    research_max_page_fetches: int = 2
 
     # ── 应用基础配置 ──
     app_env: str = "local"

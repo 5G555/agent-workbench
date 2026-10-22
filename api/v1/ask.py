@@ -43,6 +43,7 @@ class AskRequest(BaseModel):
     message: str = Field(..., min_length=1)
     mode: Literal["auto", "qa", "research"] = Field(default="auto", description="路由模式")
     source: str | None = Field(default=None, description="限定检索来源（仅 qa 有效）")
+    depth: Literal["fast", "deep"] = Field(default="fast", description="联网检索深度")
     context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -78,6 +79,7 @@ def _build_request(request: AskRequest, user: dict[str, str]) -> AgentRequest:
             "source": request.source,
             "department": user.get("department", "*"),
             "role": user.get("role", "user"),
+            "depth": request.depth,
         },
     )
 

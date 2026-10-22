@@ -30,6 +30,8 @@ class ResearchState(TypedDict, total=False):
 
     # 本轮问题
     original_query: str
+    # fast = 只用搜索摘要；deep = 允许模型打开网页正文（fetch_page，次数受限）
+    depth: str
 
     # 检索阶段
     subqueries: list[str]  # 拆出来的子问题

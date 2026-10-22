@@ -233,6 +233,7 @@ class AnswerCache:
         role: str = "",
         namespace: str = "",
         ttl: int | None = None,
+        citations: list[str] | None = None,
     ) -> None:
         client = await get_redis(self.settings)
         if client is None or not answer:
@@ -245,6 +246,7 @@ class AnswerCache:
                 "answer": answer,
                 "mode": mode,
                 "sources": sources or [],
+                "citations": citations or [],
                 "ts": int(time.time()),
             }
             expire = ttl or self.ttl

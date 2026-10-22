@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -33,6 +33,8 @@ router = APIRouter()
 class ResearchRequest(BaseModel):
     session_id: str = Field(..., min_length=1, description="会话 ID")
     message: str = Field(..., min_length=1, description="研究问题")
+    # fast：只用搜索摘要；deep：允许模型打开网页正文（次数受配置限制）
+    depth: Literal["fast", "deep"] = Field(default="fast", description="检索深度")
     context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -58,6 +60,7 @@ def _to_request(request: ResearchRequest, user: dict[str, str]) -> AgentRequest:
             **request.context,
             "department": user.get("department", "*"),
             "role": user.get("role", "user"),
+            "depth": request.depth,
         },
     )
 

@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from agents.qa.cache import get_answer_cache
 from agents.research.collector import collect_multi
+from agents.research.mcp_client import get_mcp_client, parse_mcp_payload
 from agents.research.outcome import SearchOutcome, SearchStatus
 from agents.research.prompts import (
     NO_RESULT_ANSWER,
@@ -78,7 +79,8 @@ async def cache_lookup_node(state: ResearchState) -> dict[str, Any]:
         str(state.get("tenant_id") or ""),
         str(state.get("department") or "*"),
         str(state.get("role") or "user"),
-        namespace=RESEARCH_NAMESPACE,
+        # 深度也要进键：deep 的答案（读过正文）不能和 fast 的摘要答案混用
+        namespace=f"{RESEARCH_NAMESPACE}:{state.get('depth') or 'fast'!s}",
     )
     if hit is None:
         return {"cache_hit": False}
@@ -125,10 +127,16 @@ async def cache_write_node(state: ResearchState) -> dict[str, Any]:
         tenant_id=str(state.get("tenant_id") or ""),
         department=str(state.get("department") or "*"),
         role=str(state.get("role") or "user"),
-        namespace=RESEARCH_NAMESPACE,
+        namespace=f"{RESEARCH_NAMESPACE}:{state.get('depth') or 'fast'!s}",
         ttl=settings.research_cache_ttl_seconds,
+        citations=state.get("citations") or [],
     )
-    logger.info("research.cache_stored", query=query, ttl=settings.research_cache_ttl_seconds)
+    logger.info(
+        "research.cache_stored",
+        query=query,
+        ttl=settings.research_cache_ttl_seconds,
+        depth=str(state.get("depth") or "fast"),
+    )
     return {}
 
 
@@ -197,6 +205,148 @@ async def search_node(state: ResearchState) -> dict[str, Any]:
     }
 
 
+DEEP_HINT = """
+
+【可用工具】
+你可以调用 fetch_page(url) 打开上面任意一条资料的网页正文，获取摘要里没有的内容。
+
+使用规则：
+1. 问题涉及**具体数值、参数默认值、取值范围、配置项、版本号、操作步骤**时，
+   必须先打开至少一页最相关的资料核对原文，不能只凭摘要作答。
+2. 问题属于概述、对比、原理这类，摘要已足够时可直接作答。
+3. 最多调用 {limit} 次，优先打开官方文档或最相关的那一条。"""
+
+
+async def _emit(text: str) -> None:
+    """把 token 推给前端：用 LangGraph 的 stream writer，不在图上下文时跳过。"""
+    if not text:
+        return
+    try:
+        from langgraph.config import get_stream_writer
+
+        get_stream_writer()(text)
+    except Exception as exc:
+        logger.debug("research.no_stream_writer", error=str(exc))
+
+
+async def _synthesize_deep(llm: Any, query: str, context: str, results: list[dict]) -> str:
+    """deep 模式：让模型真的打开网页正文，再作答。
+
+    控制流：
+        第 1 轮 强制调用 fetch_page（tool_choice=required）——用户既然选了 deep，
+                 就要真去读原文，不能因为摘要看起来够了就跳过
+        第 2+ 轮 由模型自主决定是否继续读（最多 research_max_page_fetches 页）
+        收尾    不带工具再问一次，确保产出的是文本答案而不是工具调用
+
+    为什么不让代码写死"抓前两条"：该抓哪一页取决于问题，模型比规则更懂；
+    但仍然用次数上限兜住成本。
+    """
+    settings = get_settings()
+    limit = max(0, settings.research_max_page_fetches)
+
+    def plain_answer() -> Any:
+        return stream_or_invoke(
+            llm,
+            [
+                SystemMessage(content=SYNTH_SYSTEM),
+                HumanMessage(content=SYNTH_USER.format(query=query, context=context)),
+            ],
+        )
+
+    if limit == 0:
+        return await plain_answer()
+
+    page_tools = await _fetch_page_tools(limit)
+    if not page_tools:
+        logger.warning("research.deep_no_tool")
+        return await plain_answer()
+
+    page_tool = page_tools["fetch_page"]
+    first_bound = llm.bind_tools([page_tool], tool_choice="required")
+    next_bound = llm.bind_tools([page_tool])
+
+    messages: list[Any] = [
+        SystemMessage(content=SYNTH_SYSTEM + DEEP_HINT.format(limit=limit)),
+        HumanMessage(content=SYNTH_USER.format(query=query, context=context)),
+    ]
+
+    used = 0
+    answer = ""
+    while used < limit:
+        bound = first_bound if used == 0 else next_bound
+        accumulated: Any = None
+        async for chunk in bound.astream(messages):
+            accumulated = chunk if accumulated is None else accumulated + chunk
+            text = str(chunk.content or "")
+            if text:
+                await _emit(text)
+
+        if accumulated is None:
+            break
+
+        calls = getattr(accumulated, "tool_calls", None) or []
+        logger.info(
+            "research.deep_round",
+            round=used + 1,
+            tool_calls=len(calls),
+            chars=len(str(accumulated.content or "")),
+        )
+        if not calls:
+            # 模型认为资料够了，直接给了答案
+            answer = str(accumulated.content or "").strip()
+            break
+
+        messages.append(accumulated)
+        for call in calls:
+            if used >= limit:
+                break
+            if str(call.get("name")) != "fetch_page":
+                continue
+            args = call.get("args") or {}
+            url = str(args.get("url", ""))
+            used += 1
+            logger.info("research.deep_fetch", url=url, round=used)
+            try:
+                page = _extract_page_text(await page_tool.ainvoke(args))
+            except Exception as exc:
+                page = f"抓取失败：{exc}"
+            messages.append(
+                ToolMessage(
+                    content=f"【网页正文】{url}\n{page}",
+                    tool_call_id=str(call.get("id", "")),
+                )
+            )
+
+    if not answer:
+        # 收尾：不给工具，逼它输出文本
+        answer = await stream_or_invoke(llm, messages)
+
+    logger.info("research.deep_done", fetches=used, chars=len(answer))
+    return answer
+
+
+async def _fetch_page_tools(limit: int) -> dict[str, Any]:
+    """从 MCP 服务取 fetch_page 工具。拿不到就返回空（上层退回普通模式）。"""
+    try:
+        client = await get_mcp_client()
+        tools = await client.get_tools()
+        page_tool = next((t for t in tools if t.name == "fetch_page"), None)
+        return {"fetch_page": page_tool} if page_tool else {}
+    except Exception as exc:
+        logger.warning("research.fetch_tool_failed", error=str(exc))
+        return {}
+
+
+def _extract_page_text(raw: Any) -> str:
+    """fetch_page 返回 {"url","text","status"} 或 content blocks，统一取正文。"""
+    items = parse_mcp_payload(raw)
+    if items:
+        first = items[0]
+        text = first.get("text") or first.get("content") or ""
+        return str(text)[:4000]
+    return str(raw)[:4000]
+
+
 async def synthesize_node(state: ResearchState) -> dict[str, Any]:
     """③ 依据资料作答，并要求标注 [序号]。
 
@@ -247,15 +397,20 @@ async def synthesize_node(state: ResearchState) -> dict[str, Any]:
 
     llm = LLMFactory.get_llm("research", temperature=0.2, streaming=True)
     answer = ""
+    deep = str(state.get("depth") or "fast") == "deep"
     try:
-        # 走统一流式封装：图内会自动推 token 事件，前端就能逐字显示
-        answer = await stream_or_invoke(
-            llm,
-            [
-                SystemMessage(content=SYNTH_SYSTEM),
-                HumanMessage(content=SYNTH_USER.format(query=query, context=context)),
-            ],
-        )
+        if deep:
+            # deep 模式：把 fetch_page 交给模型，让它自己决定要不要打开网页正文
+            answer = await _synthesize_deep(llm, query, context, results)
+        else:
+            # 走统一流式封装：图内会自动推 token 事件，前端就能逐字显示
+            answer = await stream_or_invoke(
+                llm,
+                [
+                    SystemMessage(content=SYNTH_SYSTEM),
+                    HumanMessage(content=SYNTH_USER.format(query=query, context=context)),
+                ],
+            )
     except Exception as exc:
         logger.error("research.synthesize_failed", error=str(exc))
         answer = "生成答案时出错了，请稍后重试。"

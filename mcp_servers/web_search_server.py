@@ -69,16 +69,59 @@ async def fetch_page(url: str, max_chars: int = 4000) -> dict:
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "Myagent/0.1"})
-        text = resp.text
-        # 粗暴去标签：够用即可，正文抽取不是这个工具的重点
-        import re
-
-        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.S | re.I)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = html_to_text(resp.text)
         return {"url": url, "text": text[:max_chars], "status": resp.status_code}
     except httpx.HTTPError as exc:
         return {"url": url, "text": "", "status": 0, "error": str(exc)}
+
+
+def html_to_text(html: str) -> str:
+    """把 HTML 变成可读正文。
+
+    四步，顺序不能乱：
+        1. 优先只保留 <article> / <main> 里的内容 —— 文档站的侧边栏、推荐位
+           常常不在 <nav> 里，整页剥离很难干净
+        2. 从第一个 <h1> 开始切 —— 正文标题之前通常是推广条、面包屑
+        3. 删掉脚本/样式/导航等整块标签
+        4. 块级标签转换行（保留段落与列表结构），再去剩余标签
+    """
+    import re
+
+    # 1. 定位主内容容器
+    for pattern in (r"<article[^>]*>(.*?)</article>", r"<main[^>]*>(.*?)</main>"):
+        match = re.search(pattern, html, re.S | re.I)
+        if match and len(match.group(1)) > 500:
+            html = match.group(1)
+            break
+
+    # 2. 从正文标题开始
+    heading = re.search(r"<h1[^>]*>", html, re.I)
+    if heading and heading.start() > 0:
+        html = html[heading.start() :]
+
+    # 3. 整块剔除噪声标签
+    html = re.sub(
+        r"<(script|style|nav|header|footer|aside|noscript|form|svg)[^>]*>.*?</\1>",
+        " ",
+        html,
+        flags=re.S | re.I,
+    )
+
+    # 4. 保留段落结构后去标签
+    html = re.sub(r"</(p|div|h[1-6]|li|tr|section|article)>", "\n", html, flags=re.I)
+    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = html_module_unescape(text)
+    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
+    return text.strip()
+
+
+def html_module_unescape(text: str) -> str:
+    """还原 &amp; &lt; 这类实体，否则正文里全是转义字符。"""
+    import html as html_module
+
+    return html_module.unescape(text)
 
 
 def main() -> None:
