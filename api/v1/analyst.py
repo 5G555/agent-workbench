@@ -39,6 +39,11 @@ class AnalystResponse(BaseModel):
     row_count: int = 0
     task_id: int = 0
     fields: list[str] = Field(default_factory=list)
+    # 路径 B：pandas 代码分析
+    code: str = ""
+    stdout: str = ""
+    figures: list[str] = Field(default_factory=list)  # base64 PNG
+    prep: dict[str, Any] = Field(default_factory=dict)
     error_msg: str | None = None
 
 
@@ -74,6 +79,10 @@ async def ask(
         row_count=int(structured.get("row_count") or 0),
         task_id=int(structured.get("task_id") or 0),
         fields=[str(f) for f in (structured.get("fields") or [])],
+        code=str(structured.get("code") or ""),
+        stdout=str(structured.get("stdout") or ""),
+        figures=[str(f) for f in (structured.get("figures") or [])],
+        prep=structured.get("prep") or {},
         error_msg=result.error_msg,
     )
 

@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.analyst.nodes import (
     chain_node,
+    code_node,
     describe_node,
     explore_node,
     narrative_node,
@@ -45,6 +46,13 @@ def _route_after_sql(state: AnalystState) -> str:
     return END
 
 
+def _route_after_code(state: AnalystState) -> str:
+    """代码跑失败且还没重试过 → 回 code 让它改；否则去总结。"""
+    if state.get("code_error") and not state.get("code_finished"):
+        return "retry"
+    return "narrative"
+
+
 def build_analyst_graph(checkpointer: Any = None):
     builder = StateGraph(AnalystState)
 
@@ -52,6 +60,7 @@ def build_analyst_graph(checkpointer: Any = None):
     builder.add_node("sql", sql_node)
     builder.add_node("describe", describe_node)
     builder.add_node("explore", explore_node)
+    builder.add_node("code", code_node)
     builder.add_node("narrative", narrative_node)
     builder.add_node("chain", chain_node)
 
@@ -66,7 +75,12 @@ def build_analyst_graph(checkpointer: Any = None):
 
     # C 抓完直接进入分析；B/C 都汇总到 narrative
     builder.add_edge("chain", "explore")
-    builder.add_edge("explore", "narrative")
+    builder.add_edge("explore", "code")
+    builder.add_conditional_edges(
+        "code",
+        _route_after_code,
+        {"retry": "code", "narrative": "narrative"},
+    )
     builder.add_edge("narrative", END)
 
     return builder.compile(checkpointer=checkpointer or InMemorySaver())

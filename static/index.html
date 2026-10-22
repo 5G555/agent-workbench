@@ -261,6 +261,11 @@
   background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); color: inherit;
   cursor: pointer;
 }
+.charts { display: flex; flex-wrap: wrap; gap: 12px; }
+.charts img {
+  max-width: 100%; border-radius: 10px; background: #fff;
+  border: 1px solid rgba(255,255,255,.12);
+}
 .sqlbox {
   margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; overflow: auto;
   background: #0b0e13; border: 1px solid rgba(255,255,255,.1);
@@ -489,8 +494,13 @@
       <div id="anaAnswer" class="markdown-body"></div>
     </section>
 
+    <section class="opscard" id="anaChartCard" style="display:none">
+      <h3>图表 <span id="anaChartCount" class="hint" style="opacity:.6"></span></h3>
+      <div id="anaCharts" class="charts"></div>
+    </section>
+
     <section class="opscard" id="anaSqlCard" style="display:none">
-      <h3>执行的 SQL <button class="mini" id="anaCopySql">复制</button></h3>
+      <h3 id="anaCodeTitle">执行过程 <button class="mini" id="anaCopySql">复制</button></h3>
       <pre id="anaSql" class="sqlbox"></pre>
       <div id="anaTable"></div>
     </section>
@@ -1370,14 +1380,34 @@ async function runAnalyze() {
     );
     document.getElementById("anaBadge").textContent = badge.length ? `（${badge.join(" / ")}）` : "";
 
-    if (data.sql) {
+    // 路径 B：pandas 代码 + 图表
+    const charts = data.figures || [];
+    const chartBox = document.getElementById("anaChartCard");
+    if (charts.length) {
+      chartBox.style.display = "";
+      document.getElementById("anaChartCount").textContent = `（${charts.length} 张）`;
+      document.getElementById("anaCharts").innerHTML = charts
+        .map((b64) => `<img alt="分析图表" src="data:image/png;base64,${b64}" />`)
+        .join("");
+    } else {
+      chartBox.style.display = "none";
+    }
+
+    const codeText = data.sql || data.code || "";
+    if (codeText) {
       document.getElementById("anaSqlCard").style.display = "";
-      document.getElementById("anaSql").textContent = data.sql;
+      document.getElementById("anaCodeTitle").firstChild.textContent =
+        data.sql ? "执行的 SQL " : "执行的 pandas 代码 ";
+      document.getElementById("anaSql").textContent =
+        data.sql || `${data.code}\n\n--- 程序输出 ---\n${data.stdout || "（无输出）"}`;
       renderAnaTable(data.columns || [], data.rows || []);
     } else {
       document.getElementById("anaSqlCard").style.display = "none";
     }
-    document.getElementById("anaMeta").textContent = "答案附带执行过的 SQL，可据此核对数字";
+    document.getElementById("anaMeta").textContent =
+      data.mode === "pandas"
+        ? "分析代码在沙箱里执行，只有计算与绘图权限"
+        : "答案附带执行过的 SQL，可据此核对数字";
   } catch (e) {
     showToast("分析失败：" + e.message, true);
   } finally {

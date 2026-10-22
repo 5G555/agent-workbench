@@ -13,6 +13,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from agents.analyst.code_runner import run_code
+from agents.analyst.frame import build_frame, frame_overview
 from agents.analyst.schema import catalog_prompt
 from agents.analyst.sql_guard import describe_rules, validate
 from agents.analyst.sql_runner import run_sql
@@ -82,6 +84,40 @@ SUMMARY_USER = """【问题】
 {table}
 
 请作答。"""
+
+
+CODE_SYSTEM = """你是数据分析工程师。给我一段 pandas 代码，不要解释。
+
+环境里已准备好：
+    df          由采集数据构建的 DataFrame（已做基础预处理）
+    pd / np     pandas / numpy
+    plt         matplotlib.pyplot（已设为无界面后端）
+    math / statistics / datetime / timedelta / re / json
+
+硬性要求：
+1. 只做数据分析与绘图，不要读写文件、不要联网、不要 import。
+2. 需要输出数值时用 print()，或者赋给变量 result（会被读取）。
+3. 需要画图就用 plt；一张图即可，标题用中文，注意中文乱码用英文标题。
+4. 先做必要的数据清洗（类型转换、去空、排序），再计算。
+5. 只输出代码，不要 markdown 代码块，不要注释以外的解释。"""
+
+CODE_USER = """【数据概况】
+{overview}
+
+【分析目标】
+{question}
+
+请写出完成这个分析的 pandas 代码。"""
+
+CODE_REPAIR_USER = """上一步的代码执行失败。
+
+【代码】
+{code}
+
+【报错】
+{error}
+
+请修正后重新输出一段完整可运行的代码（只输出代码）。"""
 
 
 class RoutePlan(BaseModel):
@@ -337,48 +373,138 @@ async def explore_node(state: AnalystState) -> dict[str, Any]:
     }
 
 
+async def code_node(state: AnalystState) -> dict[str, Any]:
+    """②B 让模型写 pandas 代码，在沙箱里跑，拿结果和图片。"""
+    question = _extract_question(state)
+    records = state.get("records") or []
+    code = str(state.get("code") or "")
+    error = str(state.get("code_error") or "")
+
+    if not records:
+        return {}
+
+    frame, report = build_frame(records)
+    overview = frame_overview(frame)
+
+    llm = LLMFactory.get_llm("analyst", temperature=0)
+    prompt = (
+        CODE_REPAIR_USER.format(code=code, error=error)
+        if error and code
+        else CODE_USER.format(overview=overview, question=question)
+    )
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=CODE_SYSTEM), HumanMessage(content=prompt)]
+        )
+        draft = str(response.content).strip()
+    except Exception as exc:
+        return {"code_error": f"生成代码失败：{exc}", "prep": report.as_dict()}
+
+    # 模型偶尔仍会包 ```python 代码块，剥掉
+    draft = draft.removeprefix("```python").removeprefix("```").removesuffix("```").strip()
+
+    # records 的形状是 [{"data": {...}}]，必须先展开成纯字段字典，
+    # 否则沙箱里 pd.DataFrame(records) 只会得到一列 data
+    flat_records = [
+        item["data"] if isinstance(item, dict) and isinstance(item.get("data"), dict) else item
+        for item in records
+    ]
+    result = await run_code(flat_records, draft)
+    if not result.ok and not state.get("code_retried"):
+        logger.info("analyst.code_retry", error=result.error[:80])
+        return {
+            "code": draft,
+            "code_error": result.error,
+            "code_retried": True,
+            "code_finished": False,
+            "prep": report.as_dict(),
+        }
+
+    return {
+        "code": draft,
+        "code_error": "" if result.ok else result.error,
+        "code_stdout": result.stdout,
+        "code_result": result.result,
+        "figures": result.figures,
+        "code_ms": result.elapsed_ms,
+        "prep": report.as_dict(),
+        "code_retried": True,
+        "code_finished": True,
+    }
+
+
 async def narrative_node(state: AnalystState) -> dict[str, Any]:
-    """③B 把统计结果讲成人话。"""
+    """③B 汇总代码执行结果，讲成人话。"""
     question = _extract_question(state)
     task_id = int(state.get("task_id") or 0)
-    stats = state.get("field_stats") or []
     records = state.get("records") or []
+    stdout = str(state.get("code_stdout") or "")
+    code_result = str(state.get("code_result") or "")
+    code_error = str(state.get("code_error") or "")
+    figures = state.get("figures") or []
+    code = str(state.get("code") or "")
+    prep = state.get("prep") or {}
+
+    base_output = {
+        "answer_mode": "pandas",
+        "task_id": task_id,
+        "row_count": len(records),
+        "prep": prep,
+        "code": code,
+        "stdout": stdout[:2000],
+        "figures": figures,
+        "chart_count": len(figures),
+    }
 
     if not records:
         answer = f"任务 #{task_id} 没有可分析的记录。"
         return {
             "answer": answer,
             "messages": [AIMessage(content=answer)],
-            "structured_output": {"answer_mode": "explore", "row_count": 0},
+            "structured_output": {**base_output, "row_count": 0},
         }
 
-    lines = [f"任务 #{task_id}，共 {len(records)} 条记录，字段分布如下："]
-    for item in stats[:6]:
-        top = "、".join(f"{t['value']}({t['count']})" for t in item["top"][:5])
-        lines.append(f"- {item['field']}：{item['distinct']} 种取值，最多的是 {top}")
-    detail = "\n".join(lines)
+    if code_error and not stdout and not figures:
+        answer = (
+            f"分析代码没能跑通：{code_error}\n\n"
+            "可以换个问法，或者先去爬虫分区确认这个任务抽到的字段是否包含你要的数值。"
+        )
+        return {
+            "answer": answer,
+            "messages": [AIMessage(content=answer)],
+            "structured_output": {**base_output, "error": code_error},
+        }
 
+    detail = []
+    detail.append(f"数据：任务 #{task_id}，{len(records)} 条记录")
+    if prep.get("numeric"):
+        detail.append(f"转成数值的列：{'、'.join(prep['numeric'])}")
+    if prep.get("datetime_columns"):
+        detail.append(f"转成时间的列：{'、'.join(prep['datetime_columns'])}")
+    if stdout.strip():
+        detail.append(f"程序输出：\n{stdout.strip()[:1200]}")
+    if code_result:
+        detail.append(f"计算结果：{code_result}")
+    if figures:
+        detail.append(f"已生成 {len(figures)} 张图（见下方）")
+
+    context = "\n".join(detail)
     llm = LLMFactory.get_llm("analyst", temperature=0.2, streaming=True)
     try:
         response = await llm.ainvoke(
             [
                 SystemMessage(content=SUMMARY_SYSTEM),
-                HumanMessage(content=f"【问题】{question}\n\n【统计】\n{detail}"),
+                HumanMessage(content=f"【问题】{question}\n\n【分析过程与结果】\n{context}"),
             ]
         )
         answer = str(response.content).strip()
-    except Exception:
-        answer = detail
+    except Exception as exc:
+        answer = f"（模型总结失败：{exc}）\n\n{context}"
 
     return {
         "answer": answer,
         "messages": [AIMessage(content=answer)],
-        "structured_output": {
-            "answer_mode": "explore",
-            "task_id": task_id,
-            "row_count": len(records),
-            "fields": [s["field"] for s in stats],
-        },
+        "structured_output": base_output,
     }
 
 

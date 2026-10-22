@@ -39,6 +39,15 @@ class AnalystState(TypedDict, total=False):
     sql_retried: bool
 
     # 路径 B / C
+    prep: dict
+    code: str
+    code_stdout: str
+    code_result: str
+    code_error: str
+    code_retried: bool
+    code_finished: bool
+    code_ms: int
+    figures: list[str]
     task_id: int
     records: list[dict]
     field_stats: list[dict]
