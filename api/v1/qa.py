@@ -185,6 +185,21 @@ async def clear_history(
     return {"deleted": deleted}
 
 
+class SessionItem(BaseModel):
+    session_id: str
+    last_at: str
+    messages: int
+
+
+@router.get("/sessions", response_model=list[SessionItem], summary="我的会话列表")
+async def list_sessions(
+    limit: int = Query(default=50, ge=1, le=200),
+    user: dict[str, str] = Depends(get_current_user),
+) -> list[SessionItem]:
+    rows = await get_history_store().list_sessions(f"{user['user_id']}:", limit)
+    return [SessionItem(**row) for row in rows]
+
+
 @router.get("/sources", response_model=list[str], summary="可用的检索来源")
 async def list_sources(user: dict[str, str] = Depends(get_current_user)) -> list[str]:
     try:

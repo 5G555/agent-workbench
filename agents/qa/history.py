@@ -126,6 +126,37 @@ class HistoryStore:
             for r in rows
         ]
 
+    async def list_sessions(self, prefix: str, limit: int = 50) -> list[dict]:
+        """列出某用户的所有会话（按最近活动倒序）。
+
+        prefix 传 "{user_id}:"，会话键在存的时候就带了这个前缀，天然隔离。
+        """
+        await self.ensure_table()
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT session_id, max(created_at) AS last_at, count(*) AS messages
+                FROM qa_messages
+                WHERE session_id LIKE $1
+                GROUP BY session_id
+                ORDER BY last_at DESC
+                LIMIT $2
+                """,
+                f"{prefix}%",
+                limit,
+            )
+        finally:
+            await conn.close()
+        return [
+            {
+                "session_id": r["session_id"][len(prefix) :],
+                "last_at": r["last_at"].isoformat(),
+                "messages": int(r["messages"]),
+            }
+            for r in rows
+        ]
+
     async def clear(self, session_id: str) -> int:
         await self.ensure_table()
         conn = await self._connect()

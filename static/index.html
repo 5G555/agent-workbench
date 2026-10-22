@@ -6,120 +6,159 @@
 <title>Myagent · 智能问答</title>
 <style>
   :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #262b36;
-    --text: #e6e8ec;
-    --muted: #8b93a7;
-    --accent: #4f8cff;
-    --user: #1f2937;
-    --assistant: #141a24;
-    --faq: #2e7d5b;
-    --rag: #2f6f9f;
-    --direct: #6b5b95;
+    --bg: #0f1115; --panel: #171a21; --panel2: #1c2029; --border: #262b36;
+    --text: #e6e8ec; --muted: #8b93a7; --accent: #4f8cff;
+    --user: #1f2937; --assistant: #141a24;
+    --faq: #2e7d5b; --rag: #2f6f9f; --direct: #6b5b95;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
   body {
-    margin: 0; height: 100vh; display: flex; flex-direction: column;
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14.5px;
   }
+
+  /* ── 侧边栏 ── */
+  aside {
+    width: 260px; flex: 0 0 260px; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  aside .brand { padding: 16px 16px 12px; font-weight: 600; font-size: 15px; }
+  aside .brand small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 4px; }
+  aside .actions { padding: 0 12px 12px; display: flex; gap: 8px; }
+  aside button {
+    flex: 1; height: 34px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--text); cursor: pointer; font-size: 13px;
+  }
+  aside button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sessions { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+  .session {
+    padding: 9px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+    display: flex; flex-direction: column; gap: 2px; border: 1px solid transparent;
+  }
+  .session:hover { background: var(--panel2); }
+  .session.active { background: var(--panel2); border-color: var(--accent); }
+  .session .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session .m { font-size: 11px; color: var(--muted); }
+  .session .del { float: right; color: var(--muted); font-size: 12px; }
+  .session .del:hover { color: #ff6b6b; }
+  .empty { color: var(--muted); font-size: 12px; padding: 12px; text-align: center; }
+
+  /* ── 主区 ── */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   header {
-    display: flex; align-items: center; gap: 16px;
-    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+    display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .spacer { flex: 1; }
   header .meta { font-size: 12px; color: var(--muted); }
-  .pill {
-    font-size: 12px; padding: 3px 10px; border-radius: 999px;
-    border: 1px solid var(--border); color: var(--muted); cursor: pointer;
-    background: transparent;
-  }
-  .pill.active { border-color: var(--accent); color: var(--accent); }
   select {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 4px 8px; font-size: 13px;
+    border-radius: 6px; padding: 5px 8px; font-size: 13px; max-width: 200px;
   }
-  main { flex: 1; overflow-y: auto; padding: 20px; }
-  .row { display: flex; margin-bottom: 16px; }
+  .pill {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); color: var(--muted); background: transparent;
+  }
+  .pill.active { border-color: var(--accent); color: var(--accent); }
+
+  #chat { flex: 1; overflow-y: auto; padding: 20px; }
+  .row { display: flex; margin-bottom: 18px; }
   .row.user { justify-content: flex-end; }
   .bubble {
     max-width: min(760px, 82%); padding: 12px 16px; border-radius: 12px;
-    line-height: 1.65; white-space: pre-wrap; word-break: break-word; font-size: 14.5px;
+    line-height: 1.68; word-break: break-word; border: 1px solid var(--border);
   }
-  .user .bubble { background: var(--user); border: 1px solid var(--border); }
-  .assistant .bubble { background: var(--assistant); border: 1px solid var(--border); }
-  .tag {
-    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-    margin-bottom: 8px; color: #fff;
+  .user .bubble { background: var(--user); white-space: pre-wrap; }
+  .assistant .bubble { background: var(--assistant); }
+  .bubble h1, .bubble h2, .bubble h3 { font-size: 15px; margin: 10px 0 6px; }
+  .bubble p { margin: 6px 0; }
+  .bubble ul, .bubble ol { margin: 6px 0; padding-left: 20px; }
+  .bubble li { margin: 3px 0; }
+  .bubble code {
+    background: #0b0e13; border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: Consolas, monospace; font-size: 13px;
   }
+  .bubble pre {
+    background: #0b0e13; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; margin: 8px 0;
+  }
+  .bubble pre code { border: none; padding: 0; background: none; }
+
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-bottom: 8px; color: #fff; }
   .tag.faq { background: var(--faq); }
   .tag.rag { background: var(--rag); }
-  .tag.direct { background: var(--direct); }
-  .sources { margin-top: 8px; font-size: 12px; color: var(--muted); }
-  .sources span {
-    display: inline-block; border: 1px solid var(--border); border-radius: 6px;
-    padding: 1px 6px; margin-right: 6px;
-  }
-  footer {
-    border-top: 1px solid var(--border); padding: 14px 20px; background: var(--panel);
-    display: flex; gap: 10px; align-items: flex-end;
-  }
+  .tag.llm_direct { background: var(--direct); }
+  .sources { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .sources span { display: inline-block; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; margin: 2px 4px 0 0; }
+  .tools { margin-top: 8px; display: flex; gap: 10px; opacity: 0; transition: opacity .15s; }
+  .assistant:hover .tools { opacity: 1; }
+  .tools button { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0; }
+  .tools button:hover { color: var(--accent); }
+
+  footer { border-top: 1px solid var(--border); padding: 14px 20px; background: var(--panel); }
+  .inputbar { display: flex; gap: 10px; align-items: flex-end; }
   textarea {
     flex: 1; resize: none; min-height: 44px; max-height: 160px; padding: 12px 14px;
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 10px; font-size: 14.5px; font-family: inherit; outline: none;
   }
   textarea:focus { border-color: var(--accent); }
-  button.send {
-    height: 44px; padding: 0 22px; border-radius: 10px; border: none;
-    background: var(--accent); color: #fff; font-size: 14px; cursor: pointer;
+  button.send, button.stop {
+    height: 44px; padding: 0 20px; border-radius: 10px; border: none; font-size: 14px; cursor: pointer;
   }
-  button.send:disabled { opacity: .5; cursor: not-allowed; }
-  .hint { font-size: 12px; color: var(--muted); padding: 8px 20px 0; }
-  .cursor::after {
-    content: "▋"; animation: blink 1s steps(1) infinite; color: var(--accent);
-  }
+  button.send { background: var(--accent); color: #fff; }
+  button.stop { background: #b3261e; color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .cursor::after { content: "▋"; animation: blink 1s steps(1) infinite; color: var(--accent); }
   @keyframes blink { 50% { opacity: 0; } }
 
   /* 登录遮罩 */
-  .overlay {
-    position: fixed; inset: 0; background: rgba(10, 12, 16, .88);
-    display: flex; align-items: center; justify-content: center; z-index: 50;
-  }
+  .overlay { position: fixed; inset: 0; background: rgba(10,12,16,.9); display: flex; align-items: center; justify-content: center; z-index: 50; }
   .overlay.hidden { display: none; }
-  .card {
-    width: 320px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px;
-  }
-  .card h2 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
-  .card input {
-    height: 40px; padding: 0 12px; border-radius: 8px; font-size: 14px;
-    background: var(--bg); color: var(--text); border: 1px solid var(--border); outline: none;
-  }
+  .card { width: 330px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+  .card h2 { margin: 0; font-size: 17px; }
+  .card input { height: 40px; padding: 0 12px; border-radius: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); outline: none; font-size: 14px; }
   .card input:focus { border-color: var(--accent); }
   .card .row2 { display: flex; gap: 10px; }
-  .card button {
-    flex: 1; height: 40px; border-radius: 8px; border: 1px solid var(--border);
-    background: transparent; color: var(--text); font-size: 14px; cursor: pointer;
-  }
+  .card button { flex: 1; height: 40px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-size: 14px; }
   .card button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .card .err { font-size: 12px; color: #ff6b6b; min-height: 16px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Myagent · 智能问答</h1>
-  <span class="meta" id="meta">连接中…</span>
-  <span class="spacer"></span>
-  <select id="source"><option value="">全部来源</option></select>
-  <button class="pill active" id="streamToggle">流式输出：开</button>
-  <button class="pill" id="clearBtn">清空会话</button>
-</header>
 
-<main id="chat"></main>
-<div class="hint">回车发送，Shift+回车换行。答案会标注来源与命中方式（FAQ / RAG / 直接回答）。</div>
+<aside>
+  <div class="brand">Myagent<small>企业知识库问答</small></div>
+  <div class="actions">
+    <button class="primary" id="newSession">＋ 新会话</button>
+    <button id="logoutBtn">退出</button>
+  </div>
+  <div class="sessions" id="sessions"></div>
+</aside>
+
+<main>
+  <header>
+    <h1 id="title">新会话</h1>
+    <span class="meta" id="meta">连接中…</span>
+    <span class="spacer"></span>
+    <select id="source"><option value="">全部来源</option></select>
+    <button class="pill active" id="streamToggle">流式：开</button>
+  </header>
+
+  <div id="chat"></div>
+
+  <footer>
+    <div class="inputbar">
+      <textarea id="input" placeholder="问点什么，比如：你们怎么收费 / 扫描版 PDF 怎么导入"></textarea>
+      <button class="send" id="send">发送</button>
+      <button class="stop" id="stop" style="display:none">停止</button>
+    </div>
+    <div class="hint">回车发送，Shift+回车换行。答案会标注命中方式（FAQ / 知识库检索 / 直接回答）。</div>
+  </footer>
+</main>
 
 <div class="overlay hidden" id="login">
   <div class="card">
@@ -134,111 +173,159 @@
   </div>
 </div>
 
-<footer>
-  <textarea id="input" placeholder="问点什么，比如：你们怎么收费 / 扫描版 PDF 怎么导入"></textarea>
-  <button class="send" id="send">发送</button>
-</footer>
-
 <script>
+"use strict";
 const API = "/api/v1/qa";
-const chat = document.getElementById("chat");
-const input = document.getElementById("input");
-const sendBtn = document.getElementById("send");
-const meta = document.getElementById("meta");
-const sourceSel = document.getElementById("source");
-const streamToggle = document.getElementById("streamToggle");
-const clearBtn = document.getElementById("clearBtn");
+const AUTH = "/api/v1/auth";
+
+const $ = (id) => document.getElementById(id);
+const chat = $("chat"), input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
+const meta = $("meta"), title = $("title"), sourceSel = $("source");
+const sessionsBox = $("sessions"), streamToggle = $("streamToggle");
+const loginBox = $("login"), lerr = $("lerr"), lu = $("lu"), lp = $("lp");
 
 let streaming = true;
 let busy = false;
+let abortCtl = null;
+let currentSession = "";
 
-const sessionId = (() => {
-  let id = localStorage.getItem("qa_session");
-  if (!id) {
-    id = "web_" + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem("qa_session", id);
-  }
-  return id;
-})();
+// ── 令牌管理 ───────────────────────────────────────────
+const store = {
+  get access() { return localStorage.getItem("qa_access") || ""; },
+  get refresh() { return localStorage.getItem("qa_refresh") || ""; },
+  save(d) {
+    localStorage.setItem("qa_access", d.access_token || "");
+    if (d.refresh_token) localStorage.setItem("qa_refresh", d.refresh_token);
+    if (d.user_id) localStorage.setItem("qa_user", d.user_id);
+  },
+  clear() {
+    ["qa_access", "qa_refresh", "qa_user"].forEach(k => localStorage.removeItem(k));
+  },
+};
 
-// ── 鉴权 ──────────────────────────────────────────────
-const loginBox = document.getElementById("login");
-const lerr = document.getElementById("lerr");
-const lu = document.getElementById("lu");
-const lp = document.getElementById("lp");
+let refreshPromise = null;
 
-function token() { return localStorage.getItem("qa_token") || ""; }
-
-function authHeaders(extra) {
-  const t = token();
-  const base = Object.assign({}, extra || {});
-  if (t) base["Authorization"] = "Bearer " + t;
-  return base;
+async function refreshAccess() {
+  // 并发请求同时 401 时，只发一次 refresh
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const rt = store.refresh;
+    if (!rt) return false;
+    try {
+      const res = await fetch(`${AUTH}/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!res.ok) return false;
+      store.save(await res.json());
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
 }
 
 async function apiFetch(url, opts) {
   const options = Object.assign({}, opts || {});
-  options.headers = authHeaders(options.headers);
-  const res = await fetch(url, options);
+  const headers = Object.assign({}, options.headers || {});
+  if (store.access) headers["Authorization"] = "Bearer " + store.access;
+  options.headers = headers;
+
+  let res = await fetch(url, options);
   if (res.status === 401) {
-    showLogin("登录已失效，请重新登录");
-    throw new Error("unauthenticated");
+    if (await refreshAccess()) {
+      headers["Authorization"] = "Bearer " + store.access;
+      res = await fetch(url, options);
+    }
+    if (res.status === 401) {
+      store.clear();
+      showLogin("登录已失效，请重新登录");
+      throw new Error("unauthenticated");
+    }
   }
   return res;
 }
 
-function showLogin(msg) {
-  loginBox.classList.remove("hidden");
-  lerr.textContent = msg || "";
-  lu.focus();
-}
-
+// ── 登录 ───────────────────────────────────────────────
+function showLogin(msg) { loginBox.classList.remove("hidden"); lerr.textContent = msg || ""; lu.focus(); }
 function hideLogin() { loginBox.classList.add("hidden"); }
 
 async function doAuth(path) {
-  const username = lu.value.trim();
-  const password = lp.value;
-  if (username.length < 3 || password.length < 6) {
-    lerr.textContent = "用户名至少 3 位，密码至少 6 位";
-    return;
-  }
+  const username = lu.value.trim(), password = lp.value;
+  if (username.length < 3 || password.length < 6) { lerr.textContent = "用户名至少 3 位，密码至少 6 位"; return; }
   try {
-    const res = await fetch("/api/v1/auth/" + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch(`${AUTH}/${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      lerr.textContent = data.detail || "登录失败";
-      return;
-    }
-    localStorage.setItem("qa_token", data.access_token);
-    localStorage.setItem("qa_user", data.user_id);
+    if (!res.ok) { lerr.textContent = data.detail || "失败"; return; }
+    store.save(data);
     lp.value = "";
     hideLogin();
-    await loadSources();
-    meta.textContent = `已登录 · 用户 ${data.user_id} · 角色 ${data.role}`;
-  } catch (e) {
-    lerr.textContent = "请求失败：" + e.message;
-  }
+    await boot();
+  } catch (e) { lerr.textContent = "请求失败：" + e.message; }
 }
-
-document.getElementById("loginBtn").onclick = () => doAuth("login");
-document.getElementById("registerBtn").onclick = () => doAuth("register");
+$("loginBtn").onclick = () => doAuth("login");
+$("registerBtn").onclick = () => doAuth("register");
 lp.addEventListener("keydown", (e) => { if (e.key === "Enter") doAuth("login"); });
 
-function el(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
+$("logoutBtn").onclick = async () => {
+  try {
+    await fetch(`${AUTH}/logout`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: store.refresh }),
+    });
+  } catch (e) { /* 忽略 */ }
+  store.clear();
+  chat.innerHTML = "";
+  sessionsBox.innerHTML = "";
+  showLogin("已退出");
+};
+
+// ── Markdown 轻量渲染（先转义，防 XSS）─────────────────
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function addRow(role, text) {
-  const row = el("div", "row " + role);
-  const bubble = el("div", "bubble");
-  if (text) bubble.textContent = text;
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
+
+  const lines = html.split("\n");
+  const out = [];
+  let list = null;
+  for (const line of lines) {
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (ol) { if (list !== "ol") { if (list) out.push(`</${list}>`); out.push("<ol>"); list = "ol"; } out.push(`<li>${ol[1]}</li>`); continue; }
+    if (ul) { if (list !== "ul") { if (list) out.push(`</${list}>`); out.push("<ul>"); list = "ul"; } out.push(`<li>${ul[1]}</li>`); continue; }
+    if (list) { out.push(`</${list}>`); list = null; }
+    if (/^<h[123]>/.test(line) || /^<pre>/.test(line) || !line.trim()) out.push(line);
+    else out.push(`<p>${line}</p>`);
+  }
+  if (list) out.push(`</${list}>`);
+  return out.join("\n");
+}
+
+// ── 消息渲染 ───────────────────────────────────────────
+function addRow(role, text, streaming_) {
+  const row = document.createElement("div");
+  row.className = "row " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  if (role === "user") bubble.textContent = text;
+  else if (text) bubble.innerHTML = renderMarkdown(text);
+  if (streaming_) bubble.classList.add("cursor");
   row.appendChild(bubble);
   chat.appendChild(row);
   chat.scrollTop = chat.scrollHeight;
@@ -246,56 +333,111 @@ function addRow(role, text) {
 }
 
 function renderMeta(bubble, mode, sources) {
-  bubble.querySelectorAll(".tag, .sources").forEach(n => n.remove());
+  bubble.querySelectorAll(".tag, .sources, .tools").forEach(n => n.remove());
+  const labels = { faq: "FAQ 命中", rag: "知识库检索", llm_direct: "直接回答" };
   if (mode) {
-    const label = mode === "faq" ? "FAQ 命中" : mode === "rag" ? "知识库检索" : "直接回答";
-    bubble.prepend(el("div", "tag " + mode, label));
+    const tag = document.createElement("div");
+    tag.className = "tag " + mode;
+    tag.textContent = labels[mode] || mode;
+    bubble.prepend(tag);
   }
   if (sources && sources.length) {
-    const box = el("div", "sources", "来源：");
-    sources.forEach(s => box.appendChild(el("span", null, s)));
+    const box = document.createElement("div");
+    box.className = "sources";
+    box.textContent = "来源：";
+    sources.forEach(s => {
+      const chip = document.createElement("span");
+      chip.textContent = s;
+      box.appendChild(chip);
+    });
     bubble.appendChild(box);
   }
+  const tools = document.createElement("div");
+  tools.className = "tools";
+  const copy = document.createElement("button");
+  copy.textContent = "复制";
+  copy.onclick = () => { navigator.clipboard.writeText(bubble.innerText.trim()); copy.textContent = "已复制"; setTimeout(() => copy.textContent = "复制", 1200); };
+  tools.appendChild(copy);
+  bubble.appendChild(tools);
 }
 
-async function loadSources() {
+// ── 会话 ───────────────────────────────────────────────
+function newSessionId() {
+  return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+async function loadSessions() {
   try {
-    const res = await apiFetch(`${API}/sources`);
+    const res = await apiFetch(`${API}/sessions`);
     const list = await res.json();
-    list.forEach(s => {
-      const opt = document.createElement("option");
-      opt.value = s; opt.textContent = s;
-      sourceSel.appendChild(opt);
+    sessionsBox.innerHTML = "";
+    if (!list.length) { sessionsBox.innerHTML = '<div class="empty">还没有会话</div>'; return; }
+    list.forEach(item => {
+      const el = document.createElement("div");
+      el.className = "session" + (item.session_id === currentSession ? " active" : "");
+      const t = document.createElement("div");
+      t.className = "t";
+      t.textContent = item.session_id;
+      const m = document.createElement("div");
+      m.className = "m";
+      m.textContent = `${item.messages} 条 · ${new Date(item.last_at).toLocaleString()}`;
+      const del = document.createElement("span");
+      del.className = "del";
+      del.textContent = "✕";
+      del.title = "删除会话";
+      del.onclick = async (ev) => {
+        ev.stopPropagation();
+        await apiFetch(`${API}/history/${item.session_id}`, { method: "DELETE" });
+        if (item.session_id === currentSession) startNewSession();
+        await loadSessions();
+      };
+      t.appendChild(del);
+      el.appendChild(t);
+      el.appendChild(m);
+      el.onclick = () => openSession(item.session_id);
+      sessionsBox.appendChild(el);
     });
-  } catch (e) { /* 来源列表失败不影响提问 */ }
+  } catch (e) { /* 已由 apiFetch 处理 */ }
 }
 
-async function health() {
+async function openSession(sid) {
+  currentSession = sid;
+  title.textContent = sid;
+  chat.innerHTML = "";
   try {
-    const res = await fetch("/health");
-    const data = await res.json();
-    meta.textContent = `${data.env} · Milvus ${data.milvus} · 缓存${data.cache_enabled ? "开" : "关"}`;
-  } catch (e) { meta.textContent = "服务不可用"; }
+    const res = await apiFetch(`${API}/history/${sid}`);
+    const rows = await res.json();
+    if (!rows.length) { addRow("assistant", "这个会话还没有消息。"); }
+    rows.forEach(r => {
+      const bubble = addRow(r.role === "user" ? "user" : "assistant", r.content);
+      if (r.role !== "user") renderMeta(bubble, r.answer_mode, []);
+    });
+  } catch (e) { /* 忽略 */ }
+  loadSessions();
 }
 
+function startNewSession() {
+  currentSession = newSessionId();
+  title.textContent = "新会话";
+  chat.innerHTML = "";
+  addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
+  loadSessions();
+}
+
+// ── 提问 ───────────────────────────────────────────────
 async function askStream(message, bubble) {
+  abortCtl = new AbortController();
   const res = await apiFetch(`${API}/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId, message,
-      source: sourceSel.value || null,
-    }),
+    body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
+    signal: abortCtl.signal,
   });
   if (!res.body) throw new Error("浏览器不支持流式响应");
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
-  let answer = "";
-  let mode = "";
-  let sources = [];
-  bubble.classList.add("cursor");
+  let buffer = "", answer = "", mode = "", sources = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -308,24 +450,21 @@ async function askStream(message, bubble) {
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
       if (payload === "[DONE]") continue;
-      let event;
-      try { event = JSON.parse(payload); } catch { continue; }
-      if (event.type === "token") {
-        answer += event.data;
-        bubble.textContent = answer;
+      let ev; try { ev = JSON.parse(payload); } catch (e) { continue; }
+      if (ev.type === "token") {
+        answer += ev.data;
+        bubble.innerHTML = renderMarkdown(answer);
         chat.scrollTop = chat.scrollHeight;
-      } else if (event.type === "done") {
-        mode = event.mode || "";
-        sources = event.sources || [];
-        if (!answer) answer = event.answer || "";
-        bubble.textContent = answer;
-      } else if (event.type === "error") {
-        answer += `\n[出错] ${event.message}`;
-        bubble.textContent = answer;
+      } else if (ev.type === "done") {
+        mode = ev.mode || ""; sources = ev.sources || [];
+        if (ev.answer && !answer) answer = ev.answer;
+      } else if (ev.type === "error") {
+        answer += `\n\n[出错] ${ev.message}`;
       }
     }
   }
   bubble.classList.remove("cursor");
+  bubble.innerHTML = renderMarkdown(answer);
   renderMeta(bubble, mode, sources);
 }
 
@@ -333,67 +472,71 @@ async function askOnce(message, bubble) {
   const res = await apiFetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId, message,
-      source: sourceSel.value || null,
-    }),
+    body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
   });
   const data = await res.json();
-  bubble.textContent = data.answer || data.error_msg || "（无回答）";
+  bubble.innerHTML = renderMarkdown(data.answer || data.error_msg || "（无回答）");
   renderMeta(bubble, data.structured && data.structured.answer_mode, data.sources || []);
 }
 
 async function send() {
   const message = input.value.trim();
   if (!message || busy) return;
-  busy = true; sendBtn.disabled = true;
+  busy = true; sendBtn.disabled = true; stopBtn.style.display = "";
   input.value = ""; input.style.height = "44px";
+  if (!currentSession) currentSession = newSessionId();
 
-  addRow("user", message).parentElement;
-  const bubble = addRow("assistant", "");
+  addRow("user", message);
+  const bubble = addRow("assistant", "", true);
   try {
     if (streaming) await askStream(message, bubble);
     else await askOnce(message, bubble);
   } catch (e) {
-    bubble.textContent = "请求失败：" + e.message;
+    bubble.classList.remove("cursor");
+    bubble.textContent = e.name === "AbortError" ? "（已停止）" : "请求失败：" + e.message;
   } finally {
-    busy = false; sendBtn.disabled = false; input.focus();
+    busy = false; sendBtn.disabled = false; stopBtn.style.display = "none"; abortCtl = null;
+    input.focus();
+    loadSessions();
   }
 }
 
+// ── 交互绑定 ───────────────────────────────────────────
 sendBtn.onclick = send;
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-});
-input.addEventListener("input", () => {
-  input.style.height = "44px";
-  input.style.height = Math.min(input.scrollHeight, 160) + "px";
-});
+stopBtn.onclick = () => { if (abortCtl) abortCtl.abort(); };
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener("input", () => { input.style.height = "44px"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
+streamToggle.onclick = () => { streaming = !streaming; streamToggle.textContent = "流式：" + (streaming ? "开" : "关"); streamToggle.classList.toggle("active", streaming); };
+$("newSession").onclick = startNewSession;
 
-streamToggle.onclick = () => {
-  streaming = !streaming;
-  streamToggle.textContent = "流式输出：" + (streaming ? "开" : "关");
-  streamToggle.classList.toggle("active", streaming);
-};
-
-clearBtn.onclick = async () => {
-  await apiFetch(`${API}/history/${sessionId}`, { method: "DELETE" });
-  chat.innerHTML = "";
-  addRow("assistant", "会话已清空，可以重新开始。");
-};
-
-(async function init() {
-  await health();
-  if (!token()) {
-    showLogin("请先登录");
-    return;
-  }
+async function loadSources() {
   try {
-    await loadSources();
-    addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
-  } catch (e) {
-    /* 401 已在 apiFetch 里弹出登录框 */
-  }
+    const res = await apiFetch(`${API}/sources`);
+    const list = await res.json();
+    sourceSel.innerHTML = '<option value="">全部来源</option>';
+    list.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s; sourceSel.appendChild(o); });
+  } catch (e) { /* 忽略 */ }
+}
+
+async function health() {
+  try {
+    const res = await fetch("/health");
+    const d = await res.json();
+    meta.textContent = `${d.env} · Milvus ${d.milvus} · 缓存${d.cache_enabled ? "开" : "关"}`;
+  } catch (e) { meta.textContent = "服务不可用"; }
+}
+
+async function boot() {
+  await health();
+  await loadSources();
+  if (currentSession) await openSession(currentSession);
+  else startNewSession();
+}
+
+(function init() {
+  health();
+  if (!store.access || !store.refresh) { showLogin("请先登录"); return; }
+  boot().catch(() => {});
 })();
 </script>
 </body>
