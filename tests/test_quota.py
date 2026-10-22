@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from core.quota import KEY_PREFIX, quota_key
+from agents.research.quota import KEY_PREFIX, quota_key
 
 
 def test_quota_key_is_tenant_and_day_scoped():

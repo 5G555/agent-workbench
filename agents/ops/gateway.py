@@ -28,11 +28,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from agents.ops import approval
+from agents.ops.policy import Decision, Verdict, describe, evaluate
 from agents.qa.cache import get_redis
 from config import get_settings
 from core.logger import get_logger
-from core.safety import approval
-from core.safety.policy import Decision, Verdict, describe, evaluate
 
 logger = get_logger(__name__)
 

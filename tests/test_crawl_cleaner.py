@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from agents.crawler.cleaner import (
+from agents.ops.cleaner import (
     ExportDir,
     apply_cleanup,
     clean_task,
@@ -70,7 +70,7 @@ def test_no_condition_keeps_everything(tmp_path):
 
 
 def test_apply_cleanup_removes_only_targets(tmp_path, monkeypatch):
-    import agents.crawler.cleaner as cleaner
+    import agents.ops.cleaner as cleaner
 
     _make_export(tmp_path, 1)
     _make_export(tmp_path, 2)
@@ -102,7 +102,7 @@ def test_clean_task_missing_returns_false(tmp_path):
 
 def test_apply_cleanup_refuses_outside_root(tmp_path, monkeypatch):
     """名字不是数字的目录一律跳过，防止误删。"""
-    import agents.crawler.cleaner as cleaner
+    import agents.ops.cleaner as cleaner
 
     outside = tmp_path / "important"
     outside.mkdir()

@@ -10,7 +10,7 @@
     python -m scripts.clean_cache --apply    # 真正删除
 
 只会删除「版本号不等于当前版本」的键，当前版本的缓存不受影响。
-具体实现见 core/cache_maintenance.py（MCP 工具用的是同一份逻辑）。
+具体实现见 agents/ops/cache_maintenance.py（MCP 工具用的是同一份逻辑）。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from core.cache_maintenance import clean, key_version  # noqa: F401 - key_version 供测试导入
+from agents.ops.cache_maintenance import clean, key_version  # noqa: F401 - key_version 供测试导入
 from core.logger import get_logger
 
 logger = get_logger(__name__)

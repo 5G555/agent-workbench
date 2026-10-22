@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.cache_maintenance import (
+from agents.ops.cache_maintenance import (
     PATTERNS,
     CleanupReport,
     PatternScan,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.safety.policy import Decision, Risk, evaluate
+from agents.ops.policy import Decision, Risk, evaluate
 
 
 # ── 只读 / 可重生成 ────────────────────────────────────────

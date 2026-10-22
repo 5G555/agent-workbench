@@ -115,7 +115,7 @@ def apply_cleanup(targets: list[ExportDir]) -> tuple[int, int]:
 
     返回 (移走的目录数, 释放的字节数)。
     """
-    from core.safety.trash import move_to_trash
+    from agents.ops.trash import move_to_trash
 
     dirs = 0
     freed = 0
@@ -135,7 +135,7 @@ def apply_cleanup(targets: list[ExportDir]) -> tuple[int, int]:
 
 def clean_task(task_id: int, root: Path | str | None = None) -> tuple[bool, int]:
     """把单个任务的导出目录移进回收站，返回 (是否移了, 释放字节数)。"""
-    from core.safety.trash import move_to_trash
+    from agents.ops.trash import move_to_trash
 
     moved = move_to_trash(task_id, root)
     if moved is None:

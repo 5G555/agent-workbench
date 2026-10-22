@@ -70,27 +70,34 @@ notepad .env
 - **`openai` 3.x 依赖 `httpx2`**：`httpx` 与 `httpx2` 并存是上游设计，不是冲突。
 - **没装 `torch`**：本骨架不含本地推理，需要 BGE 嵌入时再装（cp313 轮子齐全）。
 
-## 目录结构（对齐 EduAgent 的分层）
+## 目录结构
 
 ```
 Myagent/
-├─ config.py             # 唯一配置中心（待写）
-├─ main.py               # FastAPI 入口（待写）
-├─ core/                 # 工程内核，所有 Agent 共用
-│  ├─ state.py           # 主图状态契约 SupervisorState
-│  └─ orchestrator.py    # 主 Agent：决策 + 路由 + 聚合（原 supervisor.py）
-├─ agents/               # 每个子 Agent 一个包，四件套
-│  └─ <name>/
-│     ├─ state.py        #   TypedDict
-│     ├─ nodes.py        #   节点函数
-│     ├─ prompts.py      #   提示词
-│     └─ graph.py        #   build_xxx_graph()
-├─ api/
-│  └─ v1/                # 每个 Agent 一个 router
+├─ config.py             # 唯一配置中心
+├─ main.py               # FastAPI 入口
+├─ core/                 # 与业务无关的基础设施
+│  ├─ state.py           #   主图状态契约 SupervisorState
+│  ├─ orchestrator.py    #   编排器（决策 + 路由 + 聚合）
+│  ├─ db / logger / retry / security / trace / streaming
+│  └─ users / token_store / exceptions / llm_factory
+├─ agents/               # 每个领域一个包
+│  ├─ supervisor/        #   意图路由（本地 BERT + 大模型兜底）
+│  ├─ qa/                #   内部知识库（faq / cache / retrieval）
+│  ├─ research/          #   联网研究（MCP 客户端、web 配额）
+│  ├─ crawler/           #   网页采集（工具层 / 存储层 / 处理 Agent）
+│  └─ ops/               #   运维：策略、执行网关、审批、回收站、清理、缓存巡检
+├─ api/v1/               # 各领域的 HTTP 接口
+├─ mcp_servers/          # 对模型暴露的工具（web_search / ops）
 └─ tests/
 ```
 
-约定：主 Agent 不放在 `agents/` 里，它是编排器；`agents/` 只装子 Agent；跨 Agent 复用的东西进 `core/`。
+两条约定：
+
+1. **`core/` 只放与领域无关的东西**。某个模块只被一个领域用时，它就该在那个领域的包里
+   （例如缓存巡检属于 ops，不属于 core）。
+2. **安全护栏属于运维领域**。策略/审批/网关/回收站目前只服务于运维动作；
+   等第二个领域也要"删东西"时，再把网关提到 core——那时抽象才有第二个使用者。
 
 ## 常用命令
 

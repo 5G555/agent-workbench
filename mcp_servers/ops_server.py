@@ -21,17 +21,17 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from agents.crawler.cleaner import human_size, plan_cleanup, scan_exports
 from agents.crawler.exporter import export_task
 from agents.crawler.store import get_crawl_store
+from agents.ops import trash
+from agents.ops.cache_maintenance import clean as clean_cache_keys
+from agents.ops.cache_maintenance import list_backups, restore_backup
+from agents.ops.cache_maintenance import overview as cache_overview
+from agents.ops.cleaner import human_size, plan_cleanup, scan_exports
+from agents.ops.gateway import execute as gateway_execute
+from agents.ops.policy import Decision, evaluate
 from config import get_settings
-from core.cache_maintenance import clean as clean_cache_keys
-from core.cache_maintenance import list_backups, restore_backup
-from core.cache_maintenance import overview as cache_overview
 from core.logger import get_logger
-from core.safety import trash
-from core.safety.gateway import execute as gateway_execute
-from core.safety.policy import Decision, evaluate
 
 logger = get_logger(__name__)
 

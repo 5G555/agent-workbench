@@ -16,9 +16,9 @@ import asyncio
 from agents.research.evidence import Evidence
 from agents.research.mcp_client import get_mcp_client, parse_mcp_payload
 from agents.research.outcome import SearchOutcome, SearchStatus, classify_error
+from agents.research.quota import consume_web_quota
 from config import get_settings
 from core.logger import get_logger
-from core.quota import consume_web_quota
 
 logger = get_logger(__name__)
 

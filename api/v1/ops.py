@@ -19,14 +19,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from agents.crawler.cleaner import human_size, plan_cleanup, scan_exports
+from agents.ops import approval, trash
+from agents.ops.cache_maintenance import clean as clean_cache_keys
+from agents.ops.cache_maintenance import list_backups, restore_backup
+from agents.ops.cache_maintenance import overview as cache_overview
+from agents.ops.cleaner import human_size, plan_cleanup, scan_exports
+from agents.ops.gateway import execute as gateway_execute
 from api.deps import get_current_user, rate_limit
-from core.cache_maintenance import clean as clean_cache_keys
-from core.cache_maintenance import list_backups, restore_backup
-from core.cache_maintenance import overview as cache_overview
 from core.logger import get_logger
-from core.safety import approval, trash
-from core.safety.gateway import execute as gateway_execute
 
 logger = get_logger(__name__)
 

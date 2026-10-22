@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.safety import trash
+from agents.ops import trash
 
 
 def _make_export(root: Path, task_id: int, files: int = 2) -> Path:

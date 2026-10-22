@@ -17,7 +17,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from agents.crawler.cleaner import (
+from agents.crawler.exporter import DEFAULT_ROOT
+from agents.ops.cleaner import (
     apply_cleanup,
     clean_db_tasks,
     clean_task,
@@ -25,7 +26,6 @@ from agents.crawler.cleaner import (
     plan_cleanup,
     scan_exports,
 )
-from agents.crawler.exporter import DEFAULT_ROOT
 
 
 def _print_exports(exports) -> None:

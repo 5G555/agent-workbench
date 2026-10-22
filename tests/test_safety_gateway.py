@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from core.safety import approval, gateway
+from agents.ops import approval, gateway
 
 TENANT = "tenant_default"
 
