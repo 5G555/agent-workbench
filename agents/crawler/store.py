@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from config import Settings, get_settings
@@ -418,6 +419,29 @@ class CrawlStore:
                 }
             )
         return result
+
+    async def delete_tasks_before(self, cutoff: datetime, tenant_id: str | None = None) -> int:
+        """删掉 cutoff 之前创建的任务（级联删页面与记录）。不可逆。"""
+        await self.ensure_tables()
+        conn = await self._connect()
+        try:
+            if tenant_id:
+                deleted = await conn.fetchval(
+                    "WITH d AS (DELETE FROM crawl_tasks WHERE tenant_id = $1 "
+                    "AND started_at < $2 RETURNING 1) SELECT count(*) FROM d",
+                    tenant_id,
+                    cutoff,
+                )
+            else:
+                deleted = await conn.fetchval(
+                    "WITH d AS (DELETE FROM crawl_tasks WHERE started_at < $1 "
+                    "RETURNING 1) SELECT count(*) FROM d",
+                    cutoff,
+                )
+        finally:
+            await conn.close()
+        logger.info("crawler.tasks_deleted", count=int(deleted or 0), cutoff=str(cutoff)[:19])
+        return int(deleted or 0)
 
 
 _store: CrawlStore | None = None

@@ -91,6 +91,12 @@ async def export_task(
     pages_dir = target_abs / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
 
+    # 先清空 pages：重复导出时如果这次抓的页更少，旧文件会残留，
+    # 看起来像"导出成功但内容对不上"。导出是完整快照，先清再写。
+    for old in pages_dir.iterdir():
+        if old.is_file():
+            old.unlink()
+
     written: list[str] = []
     total_bytes = 0
 

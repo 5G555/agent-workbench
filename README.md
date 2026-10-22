@@ -123,10 +123,17 @@ pyright
 
 需要文件时再导出（数据默认只在库里）：
 
-```powershell
+'```powershell
 python -m scripts.export_crawl --list        # 看最近任务
 python -m scripts.export_crawl --task 5      # 导出到 data/crawl/5/
-```
+
+# 导出目录会越攒越多，清一下（默认只统计，加 --apply 才删）
+python -m scripts.clean_crawl --list
+python -m scripts.clean_crawl --keep 3 --apply         # 只留最近 3 个任务
+python -m scripts.clean_crawl --older-than 7 --apply   # 删 7 天前的
+python -m scripts.clean_crawl --task 3 --apply         # 删指定任务
+python -m scripts.clean_crawl --older-than 30 --db --apply   # 连库里的老任务一起删
+```'
 
 ```
 data/crawl/5/
