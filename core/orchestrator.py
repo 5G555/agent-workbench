@@ -153,7 +153,7 @@ class Orchestrator:
             return base
 
         safe_query = sanitize(request.user_message)
-        outcome = await collect_web(safe_query)
+        outcome = await collect_web(safe_query, tenant_id=request.tenant_id)
         if not outcome.usable:
             # 分清楚"服务出问题"和"确实没资料"：前者要提示稍后重试，别让用户以为知识库缺失
             logger.info("orchestrator.web_unusable", query=safe_query, status=outcome.status.value)

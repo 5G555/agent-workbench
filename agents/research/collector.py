@@ -18,6 +18,7 @@ from agents.research.mcp_client import get_mcp_client, parse_mcp_payload
 from agents.research.outcome import SearchOutcome, SearchStatus, classify_error
 from config import get_settings
 from core.logger import get_logger
+from core.quota import consume_web_quota
 
 logger = get_logger(__name__)
 
@@ -44,12 +45,29 @@ def _to_evidence(items: list[dict], limit: int) -> list[Evidence]:
     return evidence
 
 
-async def collect_web(query: str, max_items: int = 4, time_range: str = "") -> SearchOutcome:
-    """搜一次公网，返回带状态的结果。"""
+async def collect_web(
+    query: str,
+    max_items: int = 4,
+    time_range: str = "",
+    tenant_id: str = "",
+) -> SearchOutcome:
+    """搜一次公网，返回带状态的结果。
+
+    每次真正发起搜索前先扣一次租户日额度：额度用完就不再打搜索服务，
+    直接返回 quota_exceeded（提示语与 rate_limited 不同，用户能分清是谁的锅）。
+    """
     settings = get_settings()
     if not settings.tavily_api_key:
         logger.warning("evidence.no_key", query=query)
         return SearchOutcome(status=SearchStatus.NO_KEY)
+
+    tenant = tenant_id or settings.default_tenant_id
+    allowed, remaining = await consume_web_quota(tenant)
+    if not allowed:
+        return SearchOutcome(
+            status=SearchStatus.QUOTA_EXCEEDED,
+            detail=f"租户 {tenant} 当日额度已用完",
+        )
 
     try:
         client = await get_mcp_client()
@@ -81,6 +99,7 @@ async def collect_web(query: str, max_items: int = 4, time_range: str = "") -> S
         status=status.value,
         items=len(evidence),
         time_range=time_range or "-",
+        quota_remaining=remaining,
     )
     return SearchOutcome(status=status, items=evidence)
 
@@ -90,6 +109,7 @@ async def collect_multi(
     subqueries: list[str],
     max_items: int = 6,
     time_range: str = "",
+    tenant_id: str = "",
 ) -> SearchOutcome:
     """按多个子问题并发采集，再按 URL 去重。
 

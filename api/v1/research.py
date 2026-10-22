@@ -24,6 +24,7 @@ from api.deps import get_current_user, rate_limit
 from api.history_helpers import load_history, save_turn
 from core.logger import get_logger
 from core.orchestrator import AgentRequest, AgentResponse, AgentType, get_orchestrator
+from core.quota import web_quota_status
 
 logger = get_logger(__name__)
 
@@ -132,3 +133,9 @@ async def ask_stream(
                 )
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.get("/quota", summary="联网检索额度")
+async def quota(user: dict[str, str] = Depends(get_current_user)) -> dict[str, int]:
+    """查当前租户今天的联网检索额度用量（不消耗额度）。"""
+    return await web_quota_status(user["tenant_id"])

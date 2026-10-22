@@ -19,7 +19,8 @@ class SearchStatus(StrEnum):
 
     OK = "ok"  # 拿到资料
     NO_RESULT = "no_result"  # 服务正常，但确实没搜到
-    RATE_LIMITED = "rate_limited"  # 被限流
+    RATE_LIMITED = "rate_limited"  # 搜索服务方限流（429）
+    QUOTA_EXCEEDED = "quota_exceeded"  # 本租户当日额度用完
     NO_KEY = "no_key"  # 没配置搜索密钥
     FAILED = "failed"  # 其他错误（网络、服务异常等）
 
@@ -31,6 +32,9 @@ MESSAGES: dict[SearchStatus, str] = {
     SearchStatus.RATE_LIMITED: (
         "联网检索服务当前被限流，暂时无法查询公开资料。请稍后再试，"
         "或把问题补充得更具体一些以便从知识库中查找。"
+    ),
+    SearchStatus.QUOTA_EXCEEDED: (
+        "本租户今天的联网检索额度已用完，明天的额度会自动恢复。如需临时提高额度，请联系管理员。"
     ),
     SearchStatus.NO_KEY: "系统没有配置联网检索的密钥，无法查询公开资料，请联系管理员。",
     SearchStatus.FAILED: "联网检索服务暂时不可用，请稍后重试。",
@@ -68,6 +72,8 @@ def classify_error(message: str) -> SearchStatus:
     text = (message or "").lower()
     if "429" in text or "限流" in text or "rate limit" in text:
         return SearchStatus.RATE_LIMITED
+    if "额度" in text or "quota" in text:
+        return SearchStatus.QUOTA_EXCEEDED
     if "tavily_api_key" in text or "未配置" in text or "no api key" in text:
         return SearchStatus.NO_KEY
     return SearchStatus.FAILED

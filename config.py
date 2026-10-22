@@ -130,6 +130,8 @@ class Settings(BaseSettings):
     research_results_per_query: int = 4  # 每个子查询取几条结果
     # deep 模式下模型最多打开几个网页正文（每页 1~3 秒，别放开）
     research_max_page_fetches: int = 2
+    # 每租户每天的联网检索次数上限（0 = 不限）。先给足额度，需要收紧时改这里。
+    web_daily_quota_per_tenant: int = 500
 
     # ── 应用基础配置 ──
     app_env: str = "local"

@@ -203,6 +203,7 @@ async def search_node(state: ResearchState) -> dict[str, Any]:
         subqueries,
         max_items,
         time_range=str(state.get("time_range") or ""),
+        tenant_id=str(state.get("tenant_id") or ""),
     )
 
     logger.info(
