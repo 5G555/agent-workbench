@@ -309,7 +309,6 @@
       <div class="hint" style="opacity:.6">选一个任务查看抓取详情，或先在左边新建任务。</div>
     </div>
   </div>
-  <div class="toast hidden" id="toast"></div>
 </main>
 
 <main id="viewOps" class="view-hidden">
@@ -359,6 +358,8 @@
     </section>
   </div>
 </main>
+
+  <div class="toast hidden" id="toast"></div>
 
 <div class="backdrop" id="backdrop"></div>
 
@@ -865,14 +866,17 @@ function esc(text) {
 }
 
 function switchView(name) {
-  const chat = document.getElementById("viewChat");
-  const crawler = document.getElementById("viewCrawler");
-  chat.classList.toggle("view-hidden", name !== "chat");
-  crawler.classList.toggle("view-hidden", name !== "crawler");
+  // 三个分区都参与切换：没列全的话，切到新分区会出现"全都隐藏"的白屏
+  const views = { chat: "viewChat", crawler: "viewCrawler", ops: "viewOps" };
+  Object.entries(views).forEach(([key, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("view-hidden", key !== name);
+  });
   document.querySelectorAll(".navtab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === name);
   });
   if (name === "crawler") loadCrawlTasks();
+  if (name === "ops") loadOps();
 }
 
 let currentTaskId = 0;
