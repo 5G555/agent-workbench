@@ -99,7 +99,9 @@ class Orchestrator:
         """
         if agent_type not in self._agent_graphs:  # 缓存里没有 → 首次加载
             if agent_type == AgentType.QA:
-                pass
+                from agents.qa.graph import build_qa_graph
+
+                self._agent_graphs[agent_type] = build_qa_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")
