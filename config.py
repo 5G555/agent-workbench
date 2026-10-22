@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     cache_enabled: bool = True
     cache_ttl_seconds: int = 86400  # 答案缓存 24 小时
 
+    # ── 鉴权与限流 ──
+    # auth_enabled=false 只用于本地调试，生产必须为 true
+    auth_enabled: bool = True
+    rate_limit_per_minute: int = 60  # 每个用户每分钟最多请求数；0 = 不限
+
     # ── 大模型（DeepSeek）──
     deepseek_api_key: str  # 必填，来自 .env
     deepseek_base_url: str = "https://api.deepseek.com/v1"

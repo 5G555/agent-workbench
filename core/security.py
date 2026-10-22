@@ -1,0 +1,113 @@
+"""鉴权基础件：密码哈希与 JWT 签发/校验。
+
+与参考项目（EduAgent）的差异：
+  EduAgent 用 passlib + bcrypt，但 passlib 1.7.4 和 bcrypt>=4 有兼容坑
+  （它要读 bcrypt.__about__.__version__，bcrypt 4 删了这个属性，得打补丁）。
+  这里改用标准库 hashlib.scrypt：零额外依赖、不会随第三方版本变化而崩。
+
+JWT 用 PyJWT（项目已有），不用 python-jose。
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import os
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import jwt
+
+from config import Settings, get_settings
+from core.exceptions import AuthenticationError
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+# scrypt 参数：n=2^14 在普通 CPU 上约 50ms，够用且不会拖慢登录
+_SCRYPT_N = 2**14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_KEY_LEN = 32
+
+
+def hash_password(password: str) -> str:
+    """生成 `scrypt$n$r$p$salt_b64$hash_b64` 格式的字符串。"""
+    if not password:
+        raise ValueError("密码不能为空")
+    salt = os.urandom(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=_KEY_LEN,
+    )
+    return "$".join(
+        [
+            "scrypt",
+            str(_SCRYPT_N),
+            str(_SCRYPT_R),
+            str(_SCRYPT_P),
+            base64.b64encode(salt).decode(),
+            base64.b64encode(digest).decode(),
+        ]
+    )
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """校验密码；用 compare_digest 做常数时间比较，避免时序侧信道。"""
+    try:
+        scheme, n, r, p, salt_b64, hash_b64 = stored.split("$")
+        if scheme != "scrypt":
+            return False
+        digest = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=base64.b64decode(salt_b64),
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=len(base64.b64decode(hash_b64)),
+        )
+        return hmac.compare_digest(digest, base64.b64decode(hash_b64))
+    except Exception:
+        return False
+
+
+def create_access_token(
+    user_id: str,
+    role: str = "user",
+    tenant_id: str = "tenant_default",
+    settings: Settings | None = None,
+    expires_minutes: int | None = None,
+) -> tuple[str, int]:
+    """签发 JWT，返回 (token, 有效期秒数)。"""
+    s = settings or get_settings()
+    minutes = expires_minutes or s.jwt_access_token_expire_minutes
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "role": role,
+        "tenant_id": tenant_id,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=minutes)).timestamp()),
+    }
+    token = jwt.encode(payload, s.jwt_secret_key, algorithm=s.jwt_algorithm)
+    return token, minutes * 60
+
+
+def decode_token(token: str, settings: Settings | None = None) -> dict[str, Any]:
+    """校验并解析 JWT；失败抛 AuthenticationError（调用方转 401）。"""
+    s = settings or get_settings()
+    try:
+        payload = jwt.decode(token, s.jwt_secret_key, algorithms=[s.jwt_algorithm])
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationError("登录已过期，请重新登录") from exc
+    except jwt.PyJWTError as exc:
+        raise AuthenticationError("无效的认证凭证") from exc
+
+    if not payload.get("sub"):
+        raise AuthenticationError("令牌缺少用户标识")
+    return payload

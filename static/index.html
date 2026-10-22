@@ -82,6 +82,30 @@
     content: "▋"; animation: blink 1s steps(1) infinite; color: var(--accent);
   }
   @keyframes blink { 50% { opacity: 0; } }
+
+  /* 登录遮罩 */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10, 12, 16, .88);
+    display: flex; align-items: center; justify-content: center; z-index: 50;
+  }
+  .overlay.hidden { display: none; }
+  .card {
+    width: 320px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+  .card input {
+    height: 40px; padding: 0 12px; border-radius: 8px; font-size: 14px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border); outline: none;
+  }
+  .card input:focus { border-color: var(--accent); }
+  .card .row2 { display: flex; gap: 10px; }
+  .card button {
+    flex: 1; height: 40px; border-radius: 8px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font-size: 14px; cursor: pointer;
+  }
+  .card button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .card .err { font-size: 12px; color: #ff6b6b; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -96,6 +120,19 @@
 
 <main id="chat"></main>
 <div class="hint">回车发送，Shift+回车换行。答案会标注来源与命中方式（FAQ / RAG / 直接回答）。</div>
+
+<div class="overlay hidden" id="login">
+  <div class="card">
+    <h2>登录 Myagent</h2>
+    <input id="lu" placeholder="用户名（3 位以上）" autocomplete="username" />
+    <input id="lp" type="password" placeholder="密码（6 位以上）" autocomplete="current-password" />
+    <div class="row2">
+      <button class="primary" id="loginBtn">登录</button>
+      <button id="registerBtn">注册</button>
+    </div>
+    <div class="err" id="lerr"></div>
+  </div>
+</div>
 
 <footer>
   <textarea id="input" placeholder="问点什么，比如：你们怎么收费 / 扫描版 PDF 怎么导入"></textarea>
@@ -123,7 +160,73 @@ const sessionId = (() => {
   }
   return id;
 })();
-const userId = localStorage.getItem("qa_user") || "web_user";
+
+// ── 鉴权 ──────────────────────────────────────────────
+const loginBox = document.getElementById("login");
+const lerr = document.getElementById("lerr");
+const lu = document.getElementById("lu");
+const lp = document.getElementById("lp");
+
+function token() { return localStorage.getItem("qa_token") || ""; }
+
+function authHeaders(extra) {
+  const t = token();
+  const base = Object.assign({}, extra || {});
+  if (t) base["Authorization"] = "Bearer " + t;
+  return base;
+}
+
+async function apiFetch(url, opts) {
+  const options = Object.assign({}, opts || {});
+  options.headers = authHeaders(options.headers);
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    showLogin("登录已失效，请重新登录");
+    throw new Error("unauthenticated");
+  }
+  return res;
+}
+
+function showLogin(msg) {
+  loginBox.classList.remove("hidden");
+  lerr.textContent = msg || "";
+  lu.focus();
+}
+
+function hideLogin() { loginBox.classList.add("hidden"); }
+
+async function doAuth(path) {
+  const username = lu.value.trim();
+  const password = lp.value;
+  if (username.length < 3 || password.length < 6) {
+    lerr.textContent = "用户名至少 3 位，密码至少 6 位";
+    return;
+  }
+  try {
+    const res = await fetch("/api/v1/auth/" + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      lerr.textContent = data.detail || "登录失败";
+      return;
+    }
+    localStorage.setItem("qa_token", data.access_token);
+    localStorage.setItem("qa_user", data.user_id);
+    lp.value = "";
+    hideLogin();
+    await loadSources();
+    meta.textContent = `已登录 · 用户 ${data.user_id} · 角色 ${data.role}`;
+  } catch (e) {
+    lerr.textContent = "请求失败：" + e.message;
+  }
+}
+
+document.getElementById("loginBtn").onclick = () => doAuth("login");
+document.getElementById("registerBtn").onclick = () => doAuth("register");
+lp.addEventListener("keydown", (e) => { if (e.key === "Enter") doAuth("login"); });
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -157,7 +260,7 @@ function renderMeta(bubble, mode, sources) {
 
 async function loadSources() {
   try {
-    const res = await fetch(`${API}/sources`);
+    const res = await apiFetch(`${API}/sources`);
     const list = await res.json();
     list.forEach(s => {
       const opt = document.createElement("option");
@@ -176,11 +279,11 @@ async function health() {
 }
 
 async function askStream(message, bubble) {
-  const res = await fetch(`${API}/ask/stream`, {
+  const res = await apiFetch(`${API}/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      user_id: userId, session_id: sessionId, message,
+      session_id: sessionId, message,
       source: sourceSel.value || null,
     }),
   });
@@ -227,11 +330,11 @@ async function askStream(message, bubble) {
 }
 
 async function askOnce(message, bubble) {
-  const res = await fetch(`${API}/ask`, {
+  const res = await apiFetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      user_id: userId, session_id: sessionId, message,
+      session_id: sessionId, message,
       source: sourceSel.value || null,
     }),
   });
@@ -274,15 +377,23 @@ streamToggle.onclick = () => {
 };
 
 clearBtn.onclick = async () => {
-  await fetch(`${API}/history/${sessionId}`, { method: "DELETE" });
+  await apiFetch(`${API}/history/${sessionId}`, { method: "DELETE" });
   chat.innerHTML = "";
   addRow("assistant", "会话已清空，可以重新开始。");
 };
 
 (async function init() {
   await health();
-  await loadSources();
-  addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
+  if (!token()) {
+    showLogin("请先登录");
+    return;
+  }
+  try {
+    await loadSources();
+    addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
+  } catch (e) {
+    /* 401 已在 apiFetch 里弹出登录框 */
+  }
 })();
 </script>
 </body>
