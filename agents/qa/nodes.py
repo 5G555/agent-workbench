@@ -73,20 +73,21 @@ def _with_history(state: QAState, query: str) -> str:
 
 
 # 知识库主题列表的进程内缓存：(时间戳, 主题文本)
-_topics_cache: tuple[float, str] | None = None
+_topics_cache: dict[str, tuple[float, str]] = {}
 _TOPICS_TTL = 300.0
 
 
-async def kb_topics() -> str:
-    """从 Milvus 取当前所有文档来源，作为分类提示词的"知识库范围"。
+async def kb_topics(tenant_id: str | None = None) -> str:
+    """从 Milvus 取当前租户的文档来源，作为分类/路由提示词里的"知识库范围"。
 
     写死主题清单会随知识库增长而过时（新增值班手册后，"交接班要求"就会被误判成
-    通用知识），所以每次从库里读，5 分钟缓存一次。
+    通用知识），所以每次从库里读，按租户各缓存 5 分钟。
     """
-    global _topics_cache
+    tenant = tenant_id or get_settings().default_tenant_id
     now = time.monotonic()
-    if _topics_cache is not None and now - _topics_cache[0] < _TOPICS_TTL:
-        return _topics_cache[1]
+    cached = _topics_cache.get(tenant)
+    if cached is not None and now - cached[0] < _TOPICS_TTL:
+        return cached[1]
 
     try:
         store = get_vector_store()
@@ -94,7 +95,7 @@ async def kb_topics() -> str:
         def _query() -> list[str]:
             rows = store.client.query(
                 collection_name=store.collection_name,
-                filter='source != ""',
+                filter=f'source != "" and tenant_id == "{tenant}"',
                 output_fields=["source"],
                 limit=1000,
             )
@@ -102,15 +103,20 @@ async def kb_topics() -> str:
 
         sources = await asyncio.to_thread(_query)
     except Exception as exc:
-        logger.warning("qa.kb_topics_failed", error=str(exc))
+        logger.warning("qa.kb_topics_failed", tenant=tenant, error=str(exc))
         sources = []
 
     text = "、".join(sources) if sources else "（暂时没有可检索的资料）"
-    _topics_cache = (now, text)
+    _topics_cache[tenant] = (now, text)
     return text
 
 
 # ── 节点 ────────────────────────────────────────────────────
+def _tenant(state: QAState) -> str:
+    """取本轮请求的租户；缺失时落到默认租户（本地调试/脚本场景）。"""
+    return str(state.get("tenant_id") or get_settings().default_tenant_id)
+
+
 def _is_first_turn(state: QAState) -> bool:
     """本轮是不是会话的第一问（没有任何历史）。
 
@@ -132,7 +138,7 @@ async def cache_lookup_node(state: QAState) -> dict[str, Any]:
     if not _is_first_turn(state):  # 多轮上下文里的问题不做缓存读取
         return {"cache_hit": False, "original_query": query}
 
-    hit = await get_answer_cache().get(query)
+    hit = await get_answer_cache().get(query, _tenant(state))
     if hit is None:
         return {"cache_hit": False, "original_query": query}
 
@@ -164,6 +170,7 @@ async def cache_write_node(state: QAState) -> dict[str, Any]:
         answer,
         mode=state.get("answer_mode") or "rag",
         sources=state.get("sources") or [],
+        tenant_id=_tenant(state),
     )
     return {}
 
@@ -205,7 +212,9 @@ async def classify_node(state: QAState) -> dict[str, Any]:
                 [
                     SystemMessage(content=CLASSIFY_SYSTEM),
                     HumanMessage(
-                        content=CLASSIFY_USER.format(query=query, topics=await kb_topics())
+                        content=CLASSIFY_USER.format(
+                            query=query, topics=await kb_topics(_tenant(state))
+                        )
                     ),
                 ]
             )
@@ -247,7 +256,7 @@ async def faq_node(state: QAState) -> dict[str, Any]:
     """
     query = state.get("original_query", "")
     store = await get_faq_store()
-    hit = await store.search(query)
+    hit = await store.search(query, tenant_id=_tenant(state))
 
     if hit is None:
         return {"faq_hit": False, "faq_score": 0.0}
@@ -275,7 +284,7 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
     source_filter = state.get("source") or None  # 前端可传 source 限定学科/来源
 
     store = get_vector_store()
-    docs = await run_strategy(store, strategy, query, source_filter=source_filter)
+    docs = await run_strategy(store, strategy, query, _tenant(state), source_filter=source_filter)
 
     # 精排分数过低的一律丢掉：检索"总能"返回几条，但那几条可能跟问题毫无关系，
     # 硬塞给模型只会得到一段编造的答案。阈值见 config.retrieval_min_score。

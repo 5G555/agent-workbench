@@ -20,6 +20,7 @@ from docx import Document
 from agents.qa.cache import bump_cache_version
 from agents.qa.retrieval.vector_store import get_vector_store
 from agents.qa.splitter import split_document
+from config import get_settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -144,14 +145,27 @@ def load_documents(directory: Path) -> list:
     return docs
 
 
+def _pop_option(args: list[str], name: str) -> str | None:
+    """从参数里取出 --name value 并移除，返回 value。"""
+    if name in args:
+        i = args.index(name)
+        value = args[i + 1] if i + 1 < len(args) else None
+        del args[i : i + (2 if value else 1)]
+        return value
+    return None
+
+
 def main() -> None:
-    args = sys.argv[1:]
+    args = list(sys.argv[1:])
+
+    # 租户参数先摘出来，剩下的位置参数才是目录
+    tenant = _pop_option(args, "--tenant") or get_settings().default_tenant_id
 
     if args and args[0] == "--query":
         query = args[1] if len(args) > 1 else "你们怎么收费"
         store = get_vector_store()
-        results = store.hybrid_search_with_rerank(query)
-        print(f"\n查询: {query}\n命中 {len(results)} 个父块\n")
+        results = store.hybrid_search_with_rerank(query, tenant_id=tenant)
+        print(f"\n查询: {query}（租户 {tenant}）\n命中 {len(results)} 个父块\n")
         for i, doc in enumerate(results, 1):
             print(f"--- [{i}] source={doc.metadata.get('source')} ---")
             print(doc.page_content[:300].replace("\n", " "))
@@ -166,14 +180,15 @@ def main() -> None:
     if not documents:
         raise SystemExit(f"{directory} 下没有可导入的 {'/'.join(SUFFIXES)} 文件")
 
-    print(f"切出 {len(documents)} 个子块，开始向量化并写入 Milvus…")
+    print(f"切出 {len(documents)} 个子块，开始向量化并写入 Milvus（租户 {tenant}）…")
     store = get_vector_store()
     if "--reset" in args:
-        print("重建集合（切分参数变了必须重建）…")
+        print("重建集合（切分参数或 schema 变了必须重建）…")
         store.reset()
-    count = store.add_documents(documents)
+    count = store.add_documents(documents, tenant_id=tenant)
     time.sleep(1.5)  # Milvus 写入后有短暂可见性延迟，立刻统计会得到 0
-    print(f"写入 {count} 条，集合当前总条数: {store.count()}")
+    print(f"写入 {count} 条（租户 {tenant}），集合当前总条数: {store.count()}")
+    print(f"该租户可见条数: {store.count(tenant_id=tenant)}")
 
     # 知识库变了，旧答案缓存必须失效
     version = asyncio.run(bump_cache_version())

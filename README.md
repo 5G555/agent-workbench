@@ -169,7 +169,39 @@ python -c "import asyncio; from langchain_mcp_adapters.client import MultiServer
 python -c "import asyncio; from agents.qa.cache import bump_cache_version; print(asyncio.run(bump_cache_version()))"
 ```
 
+## 多租户隔离
 
+租户来源是 JWT 里的 `tenant_id`，一路带到检索、缓存、FAQ 三层：
+
+| 层 | 隔离方式 |
+|---|---|
+| Milvus | 每条 chunk 带 `tenant_id` 字段，检索表达式**永远**包含它（`VectorStore.build_filter`） |
+| FAQ | 表加 `tenant_id`，唯一键改成 `(tenant_id, question)`，每租户一份 BM25 索引 |
+| 答案缓存 | 键里拼租户摘要：`qa:ans:v{ver}:t{tenant_hash}:{query_hash}` |
+| 分类提示词 | 知识库主题清单按租户取，A 公司看不到 B 公司的文档名 |
+| 来源列表 | `/api/v1/qa/sources` 只返回自己租户的 |
+
+**灌数据要指定租户**：
+
+```powershell
+python -m scripts.ingest --reset --tenant tenant_default   # 改了 schema 必须重建
+python -m scripts.ingest data\tenant_demo_kb --tenant tenant_demo
+python -m scripts.ingest_faq --tenant tenant_default
+python -m scripts.ingest_faq data\tenant_demo_faq.csv --tenant tenant_demo
+```
+
+验证隔离（仓库里带了 `tenant_demo` 的演示数据）：
+
+```
+alice（tenant_default）问「你们怎么收费」→ 按坐席数加对话量双维度计费…
+bob  （tenant_demo）  问同一句        → 演示租户按年包干，每年 9800 元…
+```
+
+三个注意点：
+
+- **改了 Milvus schema 必须 `--reset` 重建集合**；`CREATE TABLE IF NOT EXISTS` 不会改已有表结构，FAQ 表用的是 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 原地迁移。
+- **注册接口接受 `tenant_id` 只为本地验证**，生产环境应由管理员开通租户。
+- FAQ 命中阈值改成"相对均匀分布提升度"，与库大小无关（大库 0.93 / 小库 0.79 / 无关 0.00），默认 0.70。
 
 ## 排错
 

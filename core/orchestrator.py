@@ -178,7 +178,7 @@ class Orchestrator:
         """
         from agents.supervisor.router import needs_escalation, route
 
-        decision = await route(request.user_message)
+        decision = await route(request.user_message, request.tenant_id)
         target = AgentType(decision.agent)
         routed_request = request.model_copy(update={"agent_type": target})
         if target == AgentType.QA:
@@ -314,7 +314,7 @@ class Orchestrator:
         """
         from agents.supervisor.router import needs_escalation, route
 
-        decision = await route(request.user_message)
+        decision = await route(request.user_message, request.tenant_id)
         yield {
             "type": "route",
             "agent": decision.agent,

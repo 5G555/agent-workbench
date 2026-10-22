@@ -32,6 +32,8 @@ router = APIRouter()
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64, description="用户名")
     password: str = Field(..., min_length=6, max_length=128, description="密码，至少 6 位")
+    # 生产环境租户应由管理员开通，这里放开只是为了本地能建多个租户做隔离验证
+    tenant_id: str = Field(default="tenant_default", max_length=64, description="所属租户")
 
 
 class LoginRequest(BaseModel):
@@ -79,7 +81,7 @@ def _remaining_seconds(payload: dict) -> int:
 @router.post("/register", response_model=TokenResponse, summary="注册并直接登录")
 async def register(request: RegisterRequest) -> TokenResponse:
     store = get_user_store()
-    user = await store.create(request.username, request.password)
+    user = await store.create(request.username, request.password, tenant_id=request.tenant_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
     return _issue_tokens(str(user["id"]), user["role"], user["tenant_id"])

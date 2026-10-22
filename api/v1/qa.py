@@ -256,11 +256,12 @@ async def feedback_stats(
 
 @router.get("/sources", response_model=list[str], summary="可用的检索来源")
 async def list_sources(user: dict[str, str] = Depends(get_current_user)) -> list[str]:
+    """只列当前租户自己的来源，不暴露别家文档名。"""
     try:
         store = get_vector_store()
         rows = store.client.query(
             collection_name=store.collection_name,
-            filter='source != ""',
+            filter=f'source != "" and tenant_id == "{user["tenant_id"]}"',
             output_fields=["source"],
             limit=1000,
         )

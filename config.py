@@ -63,9 +63,10 @@ class Settings(BaseSettings):
     embedding_use_fp16: bool = True  # GPU 上半精度，省一半显存
 
     # ── FAQ 精确命中 ──
-    # BM25 原始分经 softmax 归一化后，最高分 ≥ 该阈值才认为命中。
-    # 阈值受样本量影响：FAQ 条数少时分布更"平"，容易误命中，需要调高。
-    faq_threshold: float = 0.85
+    # BM25 分数经"相对均匀分布提升度"归一化后，最高分 ≥ 该阈值才认为命中。
+    # 该归一化与库大小无关：实测大库正确答案 0.93、小库 0.79、无关 0.00、弱重叠 0.03，
+    # 所以 0.70 能同时适用大租户和小租户。
+    faq_threshold: float = 0.70
 
     # ── 本地意图分类器 ──
     # 默认关闭：现成的 bert_query_classifier 是在"教育学科"语料上微调的，

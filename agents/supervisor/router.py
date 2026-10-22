@@ -51,13 +51,13 @@ class RouteDecision(BaseModel):
     reason: str = Field(default="")
 
 
-async def route(query: str) -> RouteDecision:
+async def route(query: str, tenant_id: str | None = None) -> RouteDecision:
     """给问题选一个 Agent。失败时退回 qa（本地答不出还能升级）。"""
     if not query.strip():
         return RouteDecision(agent="qa", confidence=1.0, reason="空问题")
 
     try:
-        topics = await kb_topics()
+        topics = await kb_topics(tenant_id)
         llm = LLMFactory.get_structured_llm("qa", RouteDecision)
         decision = await llm.ainvoke(
             [

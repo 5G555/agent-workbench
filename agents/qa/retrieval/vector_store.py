@@ -77,6 +77,8 @@ class VectorStore:
             schema.add_field("parent_content", DataType.VARCHAR, max_length=65535)
             schema.add_field("source", DataType.VARCHAR, max_length=50)
             schema.add_field("timestamp", DataType.VARCHAR, max_length=50)
+            # 多租户隔离字段：检索时强制带 tenant_id 条件，跨租户不可见
+            schema.add_field("tenant_id", DataType.VARCHAR, max_length=64)
 
             index_params = self.client.prepare_index_params()
             index_params.add_index(
@@ -94,6 +96,8 @@ class VectorStore:
                 params={"drop_ratio_build": 0.2},
             )
 
+            # 租户字段建标量索引，过滤时不至于全表扫
+            index_params.add_index(field_name="tenant_id", index_name="tenant_index")
             self.client.create_collection(
                 collection_name=self.collection_name,
                 schema=schema,
@@ -106,11 +110,16 @@ class VectorStore:
         self.client.load_collection(self.collection_name)
 
     # ── 入库 ────────────────────────────────────────────────
-    def add_documents(self, documents: list[Document]) -> int:
-        """把子块向量化后 upsert 进 Milvus，返回写入条数。"""
+    def add_documents(self, documents: list[Document], tenant_id: str = "") -> int:
+        """把子块向量化后 upsert 进 Milvus，返回写入条数。
+
+        tenant_id 决定这份资料归谁：不传就用配置里的默认租户。
+        写入必须带租户，否则检索时会被 tenant 条件过滤掉（等于写进去也查不到）。
+        """
         if not documents:
             return 0
 
+        tenant = tenant_id or self.settings.default_tenant_id
         texts = [doc.page_content for doc in documents]
         embeddings = self.embedding_function(texts)
         sparse_matrix = embeddings["sparse"]
@@ -136,19 +145,40 @@ class VectorStore:
                     "parent_content": meta.get("parent_content", doc.page_content),
                     "source": meta.get("source", "unknown"),
                     "timestamp": meta.get("timestamp", "unknown"),
+                    "tenant_id": meta.get("tenant_id", tenant),
                 }
             )
 
         self.client.upsert(collection_name=self.collection_name, data=rows)
-        logger.info("vector_store.upserted", count=len(rows), collection=self.collection_name)
+        logger.info(
+            "vector_store.upserted",
+            count=len(rows),
+            collection=self.collection_name,
+            tenant=tenant,
+        )
         return len(rows)
 
     # ── 检索 + 精排 ─────────────────────────────────────────
+    @staticmethod
+    def build_filter(tenant_id: str | None, source_filter: str | None) -> str:
+        """拼 Milvus 过滤表达式。
+
+        多租户的核心就这一行：检索条件里**永远**带 tenant_id。
+        tenant_id 为空只允许出现在管理员跨租户统计这类场景，问答链路必须传。
+        """
+        conditions: list[str] = []
+        if tenant_id:
+            conditions.append(f'tenant_id == "{tenant_id}"')
+        if source_filter:
+            conditions.append(f'source == "{source_filter}"')
+        return " and ".join(conditions)
+
     def hybrid_search_with_rerank(
         self,
         query: str,
         k: int | None = None,
         source_filter: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[Document]:
         """稠密+稀疏混合检索，取去重父块后用 CrossEncoder 精排，返回 Top-M 父文档。"""
         k = k or self.settings.retrieval_k
@@ -160,7 +190,7 @@ class VectorStore:
             int(idx): float(value) for idx, value in zip(row.indices, row.data, strict=False)
         }
 
-        filter_expr = f"source == '{source_filter}'" if source_filter else ""
+        filter_expr = self.build_filter(tenant_id, source_filter)
 
         dense_request = AnnSearchRequest(
             data=[dense_vector],
@@ -235,14 +265,18 @@ class VectorStore:
         return unique
 
     # ── 计数（验证入库用）───────────────────────────────────
-    def count(self) -> int:
+    def count(self, tenant_id: str | None = None) -> int:
         """用 query 聚合统计，比 get_collection_stats 的 row_count 更及时。
 
         注意 filter 不能传空串，空过滤会返回 0 条。
+        传 tenant_id 时只统计该租户的条数（灌完数据自检用）。
         """
+        conditions = ['id != ""']
+        if tenant_id:
+            conditions.append(self.build_filter(tenant_id, None))
         res = self.client.query(
             collection_name=self.collection_name,
-            filter='id != ""',
+            filter=" and ".join(conditions),
             output_fields=["count(*)"],
         )
         return int(res[0]["count(*)"])
