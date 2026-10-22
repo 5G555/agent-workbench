@@ -190,6 +190,16 @@
 }
 .crawldetail th { opacity: .65; font-weight: 600; position: sticky; top: 0; background: #14161f; }
 .crawldetail .tools { display: flex; gap: 8px; margin-bottom: 12px; }
+/* 导出/操作结果提示，固定在右下，8 秒后自动消失 */
+.toast {
+  position: fixed; right: 20px; bottom: 20px; z-index: 60; max-width: 520px;
+  padding: 12px 16px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  background: #1f2430; border: 1px solid rgba(99,102,241,.6);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4); white-space: pre-wrap; word-break: break-all;
+}
+.toast.err { border-color: rgba(239,68,68,.7); }
+.toast.hidden { display: none; }
+.toast code { background: rgba(255,255,255,.1); padding: 2px 5px; border-radius: 4px; }
 
   .card { width: 330px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
   .card h2 { margin: 0; font-size: 17px; }
@@ -276,6 +286,7 @@
       <div class="hint" style="opacity:.6">选一个任务查看抓取详情，或先在左边新建任务。</div>
     </div>
   </div>
+  <div class="toast hidden" id="toast"></div>
 </main>
 
 <div class="backdrop" id="backdrop"></div>
@@ -918,20 +929,42 @@ async function openCrawlTask(taskId) {
 }
 
 async function exportCrawlTask(taskId) {
+  showToast("正在导出…");
   try {
     const res = await apiFetch(`/api/v1/crawler/export/${taskId}`, { method: "POST" });
     const data = await res.json();
     if (data.success) {
       const kb = (data.bytes_written / 1024).toFixed(1);
-      addRow("assistant",
-        `已导出任务 #${data.task_id}：\n\`${data.directory}\`\n\n` +
-        `页面 ${data.pages} 个 / 记录 ${data.records} 条 / ${kb} KB`);
+      showToast(
+        `已导出任务 #${data.task_id}（${data.pages} 页 / ${data.records} 条 / ${kb} KB）\n` +
+        `文件夹：${data.directory}\n` +
+        `可直接复制路径到资源管理器打开`
+      );
+      // 详情区也留一行，关掉提示后还能看到位置
+      const box = document.getElementById("crawlDetail");
+      const old = box.querySelector(".exportline");
+      if (old) old.remove();
+      const line = document.createElement("div");
+      line.className = "exportline hint";
+      line.style.cssText = "opacity:.8;margin-bottom:12px";
+      line.innerHTML = `已导出到 <code>${esc(data.directory)}</code>（${data.files.length} 个文件）`;
+      box.insertBefore(line, box.querySelector("h3")?.nextSibling || box.firstChild);
     } else {
-      addRow("assistant", "导出失败：" + (data.error_msg || "未知原因"));
+      showToast("导出失败：" + (data.error_msg || "未知原因"), true);
     }
   } catch (e) {
-    addRow("assistant", "导出失败：" + e.message);
+    showToast("导出失败：" + e.message, true);
   }
+}
+
+let toastTimer = null;
+function showToast(text, isError = false) {
+  const box = document.getElementById("toast");
+  box.textContent = text;
+  box.classList.toggle("err", !!isError);
+  box.classList.remove("hidden");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => box.classList.add("hidden"), 9000);
 }
 
 document.querySelectorAll(".navtab").forEach((btn) => {
