@@ -5,7 +5,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 
-class QAState(TypedDict):
+class QAState(TypedDict, total=False):
     """
     智能问答 Agent 的完整状态定义。
     所有节点通过读写此 State 进行数据传递。

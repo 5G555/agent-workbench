@@ -70,11 +70,26 @@ def _with_history(state: QAState, query: str) -> str:
 
 
 # ── 节点 ────────────────────────────────────────────────────
+def _is_first_turn(state: QAState) -> bool:
+    """本轮是不是会话的第一问（没有任何历史）。
+
+    只有首轮才碰缓存，因为：
+      1. generate_node 会把历史消息拼进 prompt，答案因此依赖上下文；
+      2. 而缓存键只有 query，不含会话信息。
+    若非首轮也走缓存，「那 P2 呢」这类省略式提问会串到别的会话的答案上。
+    """
+    humans = [m for m in (state.get("messages") or []) if isinstance(m, HumanMessage)]
+    return len(humans) <= 1
+
+
 async def cache_lookup_node(state: QAState) -> dict[str, Any]:
     """⓪ 答案缓存：命中就把整条链路短路掉，连分类都不做。"""
     query = _extract_query(state)
     if not query:
         return {"cache_hit": False}
+
+    if not _is_first_turn(state):  # 多轮上下文里的问题不做缓存读取
+        return {"cache_hit": False, "original_query": query}
 
     hit = await get_answer_cache().get(query)
     if hit is None:
@@ -95,10 +110,13 @@ async def cache_lookup_node(state: QAState) -> dict[str, Any]:
 
 
 async def cache_write_node(state: QAState) -> dict[str, Any]:
-    """⑤ 回答完成后写缓存。缓存命中的轮次不重复写。"""
+    """⑤ 回答完成后写缓存。缓存命中的轮次、以及非首轮的问答都不写。"""
     query = state.get("original_query") or ""
     answer = state.get("answer") or ""
     if not query or not answer or state.get("cache_hit"):
+        return {}
+    if not _is_first_turn(state):  # 答案依赖历史，缓存了会串
+        logger.info("cache.skip_non_first_turn", query=query)
         return {}
     await get_answer_cache().set(
         query,
