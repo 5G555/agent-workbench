@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Myagent · 智能问答</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262b36;
+    --text: #e6e8ec;
+    --muted: #8b93a7;
+    --accent: #4f8cff;
+    --user: #1f2937;
+    --assistant: #141a24;
+    --faq: #2e7d5b;
+    --rag: #2f6f9f;
+    --direct: #6b5b95;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  header .meta { font-size: 12px; color: var(--muted); }
+  .pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+    background: transparent;
+  }
+  .pill.active { border-color: var(--accent); color: var(--accent); }
+  select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font-size: 13px;
+  }
+  main { flex: 1; overflow-y: auto; padding: 20px; }
+  .row { display: flex; margin-bottom: 16px; }
+  .row.user { justify-content: flex-end; }
+  .bubble {
+    max-width: min(760px, 82%); padding: 12px 16px; border-radius: 12px;
+    line-height: 1.65; white-space: pre-wrap; word-break: break-word; font-size: 14.5px;
+  }
+  .user .bubble { background: var(--user); border: 1px solid var(--border); }
+  .assistant .bubble { background: var(--assistant); border: 1px solid var(--border); }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    margin-bottom: 8px; color: #fff;
+  }
+  .tag.faq { background: var(--faq); }
+  .tag.rag { background: var(--rag); }
+  .tag.direct { background: var(--direct); }
+  .sources { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .sources span {
+    display: inline-block; border: 1px solid var(--border); border-radius: 6px;
+    padding: 1px 6px; margin-right: 6px;
+  }
+  footer {
+    border-top: 1px solid var(--border); padding: 14px 20px; background: var(--panel);
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  textarea {
+    flex: 1; resize: none; min-height: 44px; max-height: 160px; padding: 12px 14px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; font-size: 14.5px; font-family: inherit; outline: none;
+  }
+  textarea:focus { border-color: var(--accent); }
+  button.send {
+    height: 44px; padding: 0 22px; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; font-size: 14px; cursor: pointer;
+  }
+  button.send:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); padding: 8px 20px 0; }
+  .cursor::after {
+    content: "▋"; animation: blink 1s steps(1) infinite; color: var(--accent);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Myagent · 智能问答</h1>
+  <span class="meta" id="meta">连接中…</span>
+  <span class="spacer"></span>
+  <select id="source"><option value="">全部来源</option></select>
+  <button class="pill active" id="streamToggle">流式输出：开</button>
+  <button class="pill" id="clearBtn">清空会话</button>
+</header>
+
+<main id="chat"></main>
+<div class="hint">回车发送，Shift+回车换行。答案会标注来源与命中方式（FAQ / RAG / 直接回答）。</div>
+
+<footer>
+  <textarea id="input" placeholder="问点什么，比如：你们怎么收费 / 扫描版 PDF 怎么导入"></textarea>
+  <button class="send" id="send">发送</button>
+</footer>
+
+<script>
+const API = "/api/v1/qa";
+const chat = document.getElementById("chat");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const meta = document.getElementById("meta");
+const sourceSel = document.getElementById("source");
+const streamToggle = document.getElementById("streamToggle");
+const clearBtn = document.getElementById("clearBtn");
+
+let streaming = true;
+let busy = false;
+
+const sessionId = (() => {
+  let id = localStorage.getItem("qa_session");
+  if (!id) {
+    id = "web_" + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem("qa_session", id);
+  }
+  return id;
+})();
+const userId = localStorage.getItem("qa_user") || "web_user";
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function addRow(role, text) {
+  const row = el("div", "row " + role);
+  const bubble = el("div", "bubble");
+  if (text) bubble.textContent = text;
+  row.appendChild(bubble);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+  return bubble;
+}
+
+function renderMeta(bubble, mode, sources) {
+  bubble.querySelectorAll(".tag, .sources").forEach(n => n.remove());
+  if (mode) {
+    const label = mode === "faq" ? "FAQ 命中" : mode === "rag" ? "知识库检索" : "直接回答";
+    bubble.prepend(el("div", "tag " + mode, label));
+  }
+  if (sources && sources.length) {
+    const box = el("div", "sources", "来源：");
+    sources.forEach(s => box.appendChild(el("span", null, s)));
+    bubble.appendChild(box);
+  }
+}
+
+async function loadSources() {
+  try {
+    const res = await fetch(`${API}/sources`);
+    const list = await res.json();
+    list.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s; opt.textContent = s;
+      sourceSel.appendChild(opt);
+    });
+  } catch (e) { /* 来源列表失败不影响提问 */ }
+}
+
+async function health() {
+  try {
+    const res = await fetch("/health");
+    const data = await res.json();
+    meta.textContent = `${data.env} · Milvus ${data.milvus} · 缓存${data.cache_enabled ? "开" : "关"}`;
+  } catch (e) { meta.textContent = "服务不可用"; }
+}
+
+async function askStream(message, bubble) {
+  const res = await fetch(`${API}/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId, session_id: sessionId, message,
+      source: sourceSel.value || null,
+    }),
+  });
+  if (!res.body) throw new Error("浏览器不支持流式响应");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  let mode = "";
+  let sources = [];
+  bubble.classList.add("cursor");
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") continue;
+      let event;
+      try { event = JSON.parse(payload); } catch { continue; }
+      if (event.type === "token") {
+        answer += event.data;
+        bubble.textContent = answer;
+        chat.scrollTop = chat.scrollHeight;
+      } else if (event.type === "done") {
+        mode = event.mode || "";
+        sources = event.sources || [];
+        if (!answer) answer = event.answer || "";
+        bubble.textContent = answer;
+      } else if (event.type === "error") {
+        answer += `\n[出错] ${event.message}`;
+        bubble.textContent = answer;
+      }
+    }
+  }
+  bubble.classList.remove("cursor");
+  renderMeta(bubble, mode, sources);
+}
+
+async function askOnce(message, bubble) {
+  const res = await fetch(`${API}/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId, session_id: sessionId, message,
+      source: sourceSel.value || null,
+    }),
+  });
+  const data = await res.json();
+  bubble.textContent = data.answer || data.error_msg || "（无回答）";
+  renderMeta(bubble, data.structured && data.structured.answer_mode, data.sources || []);
+}
+
+async function send() {
+  const message = input.value.trim();
+  if (!message || busy) return;
+  busy = true; sendBtn.disabled = true;
+  input.value = ""; input.style.height = "44px";
+
+  addRow("user", message).parentElement;
+  const bubble = addRow("assistant", "");
+  try {
+    if (streaming) await askStream(message, bubble);
+    else await askOnce(message, bubble);
+  } catch (e) {
+    bubble.textContent = "请求失败：" + e.message;
+  } finally {
+    busy = false; sendBtn.disabled = false; input.focus();
+  }
+}
+
+sendBtn.onclick = send;
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+input.addEventListener("input", () => {
+  input.style.height = "44px";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+});
+
+streamToggle.onclick = () => {
+  streaming = !streaming;
+  streamToggle.textContent = "流式输出：" + (streaming ? "开" : "关");
+  streamToggle.classList.toggle("active", streaming);
+};
+
+clearBtn.onclick = async () => {
+  await fetch(`${API}/history/${sessionId}`, { method: "DELETE" });
+  chat.innerHTML = "";
+  addRow("assistant", "会话已清空，可以重新开始。");
+};
+
+(async function init() {
+  await health();
+  await loadSources();
+  addRow("assistant", "你好，我是 Myagent 的问答助手。可以问我产品、计费、售后、部署、故障排查相关的问题。");
+})();
+</script>
+</body>
+</html>
