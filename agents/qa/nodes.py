@@ -29,6 +29,7 @@ from agents.qa.state import QAState
 from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
+from core.streaming import stream_or_invoke
 
 logger = get_logger(__name__)
 
@@ -334,29 +335,8 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
 
 
 async def _stream_or_invoke(llm: Any, messages: list[Any]) -> str:
-    """有流式写入器就边生成边推送 token，否则一次性返回。
-
-    流式能力由 LangGraph 的 custom stream 提供：调用方用
-    `astream(stream_mode="custom")` 迭代时，这里 write 出去的内容会实时到达。
-    """
-    try:
-        from langgraph.config import get_stream_writer
-
-        writer = get_stream_writer()
-    except Exception:
-        writer = None
-
-    if writer is None:
-        resp = await llm.ainvoke(messages)
-        return str(resp.content).strip()
-
-    parts: list[str] = []
-    async for chunk in llm.astream(messages):
-        text = str(chunk.content or "")
-        if text:
-            parts.append(text)
-            writer(text)
-    return "".join(parts).strip()
+    """兼容旧调用点的薄封装，实际实现在 core.streaming。"""
+    return await stream_or_invoke(llm, messages)
 
 
 async def generate_node(state: QAState) -> dict[str, Any]:
@@ -379,7 +359,7 @@ async def generate_node(state: QAState) -> dict[str, Any]:
         }
 
     context = "\n\n".join(str(c["content"]) for c in chunks)
-    llm = LLMFactory.get_llm("qa", temperature=0.2)
+    llm = LLMFactory.get_llm("qa", temperature=0.2, streaming=True)
     answer = await _stream_or_invoke(
         llm,
         [
@@ -405,7 +385,7 @@ async def generate_node(state: QAState) -> dict[str, Any]:
 async def direct_node(state: QAState) -> dict[str, Any]:
     """通用知识分支：不检索，直接回答。"""
     query = state.get("original_query", "")
-    llm = LLMFactory.get_llm("qa", temperature=0.3)
+    llm = LLMFactory.get_llm("qa", temperature=0.3, streaming=True)
     answer = await _stream_or_invoke(
         llm,
         [SystemMessage(content=DIRECT_SYSTEM), HumanMessage(content=_with_history(state, query))],

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from enum import StrEnum
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 from core.exceptions import PipelineError
 from core.logger import get_logger
 from core.retry import with_retry
+from core.streaming import TokenSink
 
 logger = get_logger(__name__)
 
@@ -121,7 +123,12 @@ class Orchestrator:
 
         return self._agent_graphs[agent_type]  # 返回（缓存的）编译图
 
-    async def _escalate_to_web(self, request: AgentRequest, base: AgentResponse) -> AgentResponse:
+    async def _escalate_to_web(
+        self,
+        request: AgentRequest,
+        base: AgentResponse,
+        on_token: TokenSink | None = None,
+    ) -> AgentResponse:
         """把公网证据并进统一作答，而不是让第二个 Agent 另答一遍。
 
         三道关：
@@ -153,7 +160,7 @@ class Orchestrator:
 
         evidence = EvidenceSet()
         evidence.extend(items)
-        answer, cited = await compose_answer(request.user_message, evidence)
+        answer, cited = await compose_answer(request.user_message, evidence, on_token=on_token)
 
         return AgentResponse(
             success=True,
@@ -349,20 +356,61 @@ class Orchestrator:
                 content=final_answer,
                 structured={"answer_mode": final_mode},
             )
-            enhanced = await self._escalate_to_web(request, base)
-            if enhanced.structured and enhanced.structured.get("answer_mode") == "web_enhanced":
-                yield {"type": "token", "data": enhanced.content}
-                yield {
-                    "type": "done",
-                    "answer": enhanced.content,
-                    "sources": enhanced.structured.get("sources") or [],
-                    "mode": "web_enhanced",
-                }
-            else:
-                yield {"type": "token", "data": enhanced.content}
-            yield {"type": "final", "answer": enhanced.content, "mode": "web_enhanced"}
+            async for event in self._stream_escalation(request, base):
+                yield event
         elif final_answer:
             yield {"type": "final", "answer": final_answer, "mode": final_mode}
+
+    async def _stream_escalation(
+        self, request: AgentRequest, base: AgentResponse
+    ) -> AsyncIterator[dict[str, Any]]:
+        """边生成边把 compose 的 token 转发出去。
+
+        compose 在图之外执行，拿不到 LangGraph 的 stream writer，
+        所以用"回调写队列 + 主协程读队列"的方式把它接回事件流。
+        """
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        sentinel = object()
+
+        async def on_token(text: str) -> None:
+            await queue.put(("token", text))
+
+        async def produce() -> None:
+            try:
+                result = await self._escalate_to_web(request, base, on_token=on_token)
+                await queue.put(("result", result))
+            except Exception as exc:  # 兜底：别让升级失败把流挂住
+                logger.error("orchestrator.escalation_failed", error=str(exc))
+                await queue.put(("error", str(exc)))
+            finally:
+                await queue.put(sentinel)
+
+        task = asyncio.create_task(produce())
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                kind, payload = item
+                if kind == "token":
+                    yield {"type": "token", "data": payload}
+                elif kind == "result":
+                    structured = payload.structured or {}
+                    yield {
+                        "type": "done",
+                        "answer": payload.content,
+                        "sources": structured.get("sources") or [],
+                        "mode": structured.get("answer_mode") or "web_enhanced",
+                    }
+                    yield {
+                        "type": "final",
+                        "answer": payload.content,
+                        "mode": structured.get("answer_mode") or "web_enhanced",
+                    }
+                elif kind == "error":
+                    yield {"type": "error", "message": payload}
+        finally:
+            await task
 
     async def _run_single_agent(self, request: AgentRequest) -> AgentResponse:
         """

@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agents.research.evidence import EvidenceSet
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
+from core.streaming import TokenSink, stream_or_invoke
 
 logger = get_logger(__name__)
 
@@ -36,12 +37,17 @@ async def compose_answer(
     query: str,
     evidence: EvidenceSet,
     history: str = "无历史对话",
+    on_token: TokenSink | None = None,
 ) -> tuple[str, list[str]]:
-    """生成答案，返回 (答案文本, 被引用的 URL 列表)。"""
+    """生成答案，返回 (答案文本, 被引用的 URL 列表)。
+
+    on_token 传入时边生成边回调，用于 orchestrator 转发 SSE token 事件；
+    这条链路在图之外，拿不到 LangGraph 的 stream writer，只能靠回调。
+    """
     if evidence.empty:
         return "知识库和公开资料中都没有找到相关内容。", []
 
-    llm = LLMFactory.get_llm("qa", temperature=0.2)
+    llm = LLMFactory.get_llm("qa", temperature=0.2, streaming=True)
     messages: list[Any] = [
         SystemMessage(content=SYSTEM),
         HumanMessage(
@@ -54,8 +60,7 @@ async def compose_answer(
     ]
 
     try:
-        response = await llm.ainvoke(messages)
-        answer = str(response.content).strip()
+        answer = await stream_or_invoke(llm, messages, on_token=on_token)
     except Exception as exc:
         logger.error("compose.failed", error=str(exc))
         return "生成答案时出错了，请稍后重试。", []

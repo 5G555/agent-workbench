@@ -30,6 +30,7 @@ from agents.research.tools import SearchResult, dedup_results
 from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
+from core.streaming import stream_or_invoke
 
 logger = get_logger(__name__)
 
@@ -226,16 +227,17 @@ async def synthesize_node(state: ResearchState) -> dict[str, Any]:
         for index, item in enumerate(results, 1)
     )
 
-    llm = LLMFactory.get_llm("research", temperature=0.2)
+    llm = LLMFactory.get_llm("research", temperature=0.2, streaming=True)
     answer = ""
     try:
-        response = await llm.ainvoke(
+        # 走统一流式封装：图内会自动推 token 事件，前端就能逐字显示
+        answer = await stream_or_invoke(
+            llm,
             [
                 SystemMessage(content=SYNTH_SYSTEM),
                 HumanMessage(content=SYNTH_USER.format(query=query, context=context)),
-            ]
+            ],
         )
-        answer = str(response.content).strip()
     except Exception as exc:
         logger.error("research.synthesize_failed", error=str(exc))
         answer = "生成答案时出错了，请稍后重试。"
