@@ -115,6 +115,27 @@
   .cursor::after { content: "▋"; animation: blink 1s steps(1) infinite; color: var(--accent); }
   @keyframes blink { 50% { opacity: 0; } }
 
+  /* 移动端：侧边栏变抽屉 */
+  .menu-btn { display: none; width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); cursor: pointer; font-size: 16px; }
+  .backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; }
+  .backdrop.show { display: block; }
+  @media (max-width: 760px) {
+    aside {
+      position: fixed; left: 0; top: 0; bottom: 0; z-index: 41; width: 78vw; max-width: 300px;
+      transform: translateX(-102%); transition: transform .2s ease;
+    }
+    aside.open { transform: translateX(0); }
+    .menu-btn { display: block; }
+    header { padding: 10px 12px; gap: 8px; }
+    header h1 { font-size: 14px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    header .meta { display: none; }
+    #chat { padding: 12px; }
+    .bubble { max-width: 92%; font-size: 14px; }
+    footer { padding: 10px 12px; }
+    .hint { display: none; }
+    .tools { opacity: 1; }
+  }
+
   /* 登录遮罩 */
   .overlay { position: fixed; inset: 0; background: rgba(10,12,16,.9); display: flex; align-items: center; justify-content: center; z-index: 50; }
   .overlay.hidden { display: none; }
@@ -141,6 +162,7 @@
 
 <main>
   <header>
+    <button class="menu-btn" id="menuBtn" title="会话列表">☰</button>
     <h1 id="title">新会话</h1>
     <span class="meta" id="meta">连接中…</span>
     <span class="spacer"></span>
@@ -159,6 +181,8 @@
     <div class="hint">回车发送，Shift+回车换行。答案会标注命中方式（FAQ / 知识库检索 / 直接回答）。</div>
   </footer>
 </main>
+
+<div class="backdrop" id="backdrop"></div>
 
 <div class="overlay hidden" id="login">
   <div class="card">
@@ -354,14 +378,47 @@ function renderMeta(bubble, mode, sources) {
   }
   const tools = document.createElement("div");
   tools.className = "tools";
+
+  const up = document.createElement("button");
+  up.textContent = "👍 有帮助";
+  up.onclick = () => sendFeedback(bubble, 1, up, down);
+  const down = document.createElement("button");
+  down.textContent = "👎 没帮助";
+  down.onclick = () => sendFeedback(bubble, -1, up, down);
+
   const copy = document.createElement("button");
   copy.textContent = "复制";
   copy.onclick = () => { navigator.clipboard.writeText(bubble.innerText.trim()); copy.textContent = "已复制"; setTimeout(() => copy.textContent = "复制", 1200); };
+
+  tools.appendChild(up);
+  tools.appendChild(down);
   tools.appendChild(copy);
   bubble.appendChild(tools);
 }
 
+async function sendFeedback(bubble, rating, upBtn, downBtn) {
+  const answer = bubble.innerText.replace(/^.*?(FAQ 命中|知识库检索|直接回答)/, "").trim();
+  try {
+    await apiFetch(`${API}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: currentSession, rating, answer }),
+    });
+    upBtn.style.color = rating === 1 ? "#2e7d5b" : "";
+    downBtn.style.color = rating === -1 ? "#b3261e" : "";
+    upBtn.textContent = rating === 1 ? "👍 已反馈" : "👍 有帮助";
+    downBtn.textContent = rating === -1 ? "👎 已反馈" : "👎 没帮助";
+  } catch (e) { /* 反馈失败不影响使用 */ }
+}
+
 // ── 会话 ───────────────────────────────────────────────
+const aside = document.querySelector("aside");
+const backdrop = $("backdrop");
+function openDrawer() { aside.classList.add("open"); backdrop.classList.add("show"); }
+function closeDrawer() { aside.classList.remove("open"); backdrop.classList.remove("show"); }
+$("menuBtn").onclick = () => (aside.classList.contains("open") ? closeDrawer() : openDrawer());
+backdrop.onclick = closeDrawer;
+
 function newSessionId() {
   return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -377,10 +434,29 @@ async function loadSessions() {
       el.className = "session" + (item.session_id === currentSession ? " active" : "");
       const t = document.createElement("div");
       t.className = "t";
-      t.textContent = item.session_id;
+      t.textContent = item.title || item.session_id;
+
       const m = document.createElement("div");
       m.className = "m";
       m.textContent = `${item.messages} 条 · ${new Date(item.last_at).toLocaleString()}`;
+
+      const rename = document.createElement("span");
+      rename.className = "del";
+      rename.textContent = "✎";
+      rename.title = "重命名";
+      rename.onclick = async (ev) => {
+        ev.stopPropagation();
+        const next = prompt("新的会话标题", item.title || item.session_id);
+        if (!next || !next.trim()) return;
+        await apiFetch(`${API}/sessions/${item.session_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: next.trim() }),
+        });
+        if (item.session_id === currentSession) title.textContent = next.trim();
+        await loadSessions();
+      };
+
       const del = document.createElement("span");
       del.className = "del";
       del.textContent = "✕";
@@ -391,10 +467,12 @@ async function loadSessions() {
         if (item.session_id === currentSession) startNewSession();
         await loadSessions();
       };
+
+      t.appendChild(rename);
       t.appendChild(del);
       el.appendChild(t);
       el.appendChild(m);
-      el.onclick = () => openSession(item.session_id);
+      el.onclick = () => { openSession(item.session_id); closeDrawer(); };
       sessionsBox.appendChild(el);
     });
   } catch (e) { /* 已由 apiFetch 处理 */ }

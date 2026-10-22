@@ -18,7 +18,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -92,6 +92,8 @@ async def _save_turn(
     try:
         store = get_history_store()
         key = _session_key(user, session_id)
+        # 首次出现的会话顺手登记，并用这句话当默认标题
+        await store.touch_session(key, user["user_id"], question)
         await store.append(key, user["user_id"], "user", question)
         await store.append(key, user["user_id"], "assistant", answer, answer_mode=mode)
     except Exception as exc:
@@ -189,6 +191,18 @@ class SessionItem(BaseModel):
     session_id: str
     last_at: str
     messages: int
+    title: str = ""
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=64, description="新标题")
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    rating: int = Field(..., description="1 = 有帮助，-1 = 没帮助")
+    answer: str = Field(..., min_length=1, max_length=20000, description="被评价的答案原文")
+    comment: str = Field(default="", max_length=500)
 
 
 @router.get("/sessions", response_model=list[SessionItem], summary="我的会话列表")
@@ -198,6 +212,46 @@ async def list_sessions(
 ) -> list[SessionItem]:
     rows = await get_history_store().list_sessions(f"{user['user_id']}:", limit)
     return [SessionItem(**row) for row in rows]
+
+
+@router.patch("/sessions/{session_id}", summary="会话重命名")
+async def rename_session(
+    session_id: str,
+    request: RenameRequest,
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    ok = await get_history_store().rename_session(_session_key(user, session_id), request.title)
+    if not ok:  # 还没有消息的会话没有元信息行，先补一条
+        await get_history_store().touch_session(
+            _session_key(user, session_id), user["user_id"], request.title
+        )
+        ok = await get_history_store().rename_session(_session_key(user, session_id), request.title)
+    return {"ok": ok, "title": request.title}
+
+
+@router.post("/feedback", summary="评价答案（赞/踩）")
+async def feedback(
+    request: FeedbackRequest,
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    if request.rating not in (1, -1):
+        raise HTTPException(status_code=400, detail="rating 只能是 1 或 -1")
+    await get_history_store().save_feedback(
+        _session_key(user, request.session_id),
+        user["user_id"],
+        request.rating,
+        request.answer,
+        request.comment,
+    )
+    logger.info("qa.feedback", rating=request.rating, session=request.session_id)
+    return {"ok": True}
+
+
+@router.get("/feedback/stats", summary="我的评价统计")
+async def feedback_stats(
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, int]:
+    return await get_history_store().feedback_stats(f"{user['user_id']}:")
 
 
 @router.get("/sources", response_model=list[str], summary="可用的检索来源")
