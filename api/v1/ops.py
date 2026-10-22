@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agents.ops import approval, trash
@@ -318,4 +318,31 @@ async def approval_confirm(
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="只有管理员可以审批删除操作")
     ok, message, ticket = await approval.confirm_ticket(approval_id, user["user_id"])
+    return {"ok": ok, "message": message, "ticket": ticket}
+
+
+@router.get("/approvals", summary="待审批列表（管理员）")
+async def approvals_list(
+    status: str = Query(
+        default="pending", description="pending / confirmed / used / rejected / all"
+    ),
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """审批收件箱。管理员才能看，且只看本租户的申请。"""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以查看审批列表")
+    tickets = await approval.list_tickets(None if status == "all" else status)
+    items = [t for t in tickets if t.get("tenant_id") == user["tenant_id"]]
+    return {"count": len(items), "items": items}
+
+
+@router.post("/approvals/{approval_id}/reject", summary="拒绝审批（管理员）")
+async def approval_reject(
+    approval_id: str,
+    user: dict[str, str] = Depends(get_current_user),
+    _: None = Depends(rate_limit),
+) -> dict[str, Any]:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以审批删除操作")
+    ok, message, ticket = await approval.reject_ticket(approval_id, user["user_id"])
     return {"ok": ok, "message": message, "ticket": ticket}

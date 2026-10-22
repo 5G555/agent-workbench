@@ -184,3 +184,55 @@ async def get_ticket(approval_id: str) -> dict | None:
         return None
     raw = await client.get(_key(approval_id))
     return json.loads(raw) if raw else None
+
+
+async def list_tickets(status: str | None = None) -> list[dict[str, Any]]:
+    """列出票据（默认全部），按创建时间倒序。
+
+    为什么用 SCAN 而不是维护一个索引集合：
+        票据数量很少（一次删除一条，过期自动消失），SCAN 足够；
+        维护 Set 还要处理"过期了要从集合里删"，反而多一处不一致。
+    """
+    client: Any = await get_redis()
+    if client is None:
+        return []
+
+    tickets: list[dict[str, Any]] = []
+    async for raw in client.scan_iter(match=f"{KEY_PREFIX}:*", count=200):
+        key = raw if isinstance(raw, str) else raw.decode()
+        payload = await client.get(key)
+        if not payload:
+            continue
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if status and data.get("status") != status:
+            continue
+        tickets.append(data)
+
+    tickets.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return tickets
+
+
+async def reject_ticket(approval_id: str, operator: str) -> tuple[bool, str, dict | None]:
+    """拒绝一张票据：标记 rejected 并让它彻底失效。"""
+    client = await get_redis()
+    if client is None:
+        return False, "审批存储不可用", None
+
+    raw = await client.get(_key(approval_id))
+    if not raw:
+        return False, "票据不存在或已过期", None
+
+    data = json.loads(raw)
+    if data.get("status") != "pending":
+        return False, f"票据状态是 {data.get('status')}，不能拒绝", data
+
+    data["status"] = "rejected"
+    data["operator"] = operator
+    data["rejected_at"] = datetime.now(UTC).isoformat()
+    # 拒绝后只留 5 分钟可查，随即消失
+    await client.set(_key(approval_id), json.dumps(data, ensure_ascii=False), ex=300)
+    logger.info("approval.rejected", approval=approval_id, operator=operator)
+    return True, "已拒绝", data

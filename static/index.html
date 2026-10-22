@@ -385,6 +385,22 @@
       </div>
     </section>
 
+    <section class="opscard" id="myApprovalCard" style="display:none">
+      <h3>我的待审批 <span id="myApprovalSummary" class="hint" style="opacity:.6"></span></h3>
+      <table class="opstable">
+        <thead><tr><th>操作</th><th>影响</th><th>票据</th><th>操作</th></tr></thead>
+        <tbody id="myApprovalRows"></tbody>
+      </table>
+    </section>
+
+    <section class="opscard" id="approvalCard" style="display:none">
+      <h3>待审批（管理员）<span id="approvalSummary" class="hint" style="opacity:.6"></span></h3>
+      <table class="opstable">
+        <thead><tr><th>发起人</th><th>操作</th><th>影响</th><th>可逆性</th><th>操作</th></tr></thead>
+        <tbody id="approvalRows"></tbody>
+      </table>
+    </section>
+
     <section class="opscard">
       <h3>让 Agent 做</h3>
       <div class="inputbar">
@@ -1092,7 +1108,18 @@ document.getElementById("menuBtn2").onclick = () => {
 // ══════════════════════════════════════════════════════
 // 运维分区：缓存巡检 + 导出目录清理（都是"先预演再执行"）
 // ══════════════════════════════════════════════════════
+let currentUser = { user_id: "", role: "" };
+
+async function loadMe() {
+  try {
+    currentUser = await apiFetch("/api/v1/auth/me").then((r) => r.json());
+  } catch (e) {
+    currentUser = { user_id: "", role: "" };
+  }
+}
+
 async function loadOps() {
+  await loadMe();
   try {
     const [cacheRes, exportRes, trashRes] = await Promise.all([
       apiFetch("/api/v1/ops/cache").then((r) => r.json()),
@@ -1150,12 +1177,129 @@ async function loadOps() {
 
     document.getElementById("opsMeta").textContent =
       `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} · 回收站 ${trashRes.count}`;
+
+    await loadApprovals();
   } catch (e) {
     showToast("加载运维数据失败：" + e.message, true);
     // 别让界面停在"加载中…"而不给线索
     document.getElementById("exportRows").innerHTML =
       `<tr><td colspan="6" style="color:#ff6b6b">加载失败：${esc(e.message)}</td></tr>`;
   }
+}
+
+// ── 审批收件箱 ──────────────────────────────────────────────
+// 管理员看别人提的申请；普通用户看自己提的（等批准后重试）。
+let pendingMine = [];
+
+async function loadApprovals() {
+  renderMine();
+  if (currentUser.role !== "admin") {
+    document.getElementById("approvalCard").style.display = "none";
+    return;
+  }
+  try {
+    const data = await apiFetch("/api/v1/ops/approvals?status=pending").then((r) => r.json());
+    const items = data.items || [];
+    document.getElementById("approvalCard").style.display = "";
+    document.getElementById("approvalSummary").textContent = items.length ? `（${items.length}）` : "（无）";
+    document.getElementById("approvalRows").innerHTML = items.length
+      ? items.map((t) => `<tr>
+          <td>#${esc(t.requester || "-")}</td>
+          <td>${esc(t.tool || "")}</td>
+          <td title="${esc(JSON.stringify(t.args || {}))}">${esc(t.impact || "-")}</td>
+          <td>${esc(t.reversible || "-")}</td>
+          <td>
+            <button data-approve="${esc(t.approval_id)}">批准</button>
+            <button data-reject="${esc(t.approval_id)}">拒绝</button>
+          </td></tr>`).join("")
+      : '<tr><td colspan="5" style="opacity:.6">没有待审批的申请</td></tr>';
+
+    document.querySelectorAll("#approvalRows [data-approve]").forEach((btn) => {
+      btn.onclick = () => decideApproval(btn.dataset.approve, true);
+    });
+    document.querySelectorAll("#approvalRows [data-reject]").forEach((btn) => {
+      btn.onclick = () => decideApproval(btn.dataset.reject, false);
+    });
+  } catch (e) {
+    document.getElementById("approvalCard").style.display = "";
+    document.getElementById("approvalRows").innerHTML =
+      `<tr><td colspan="5" style="color:#ff6b6b">${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function decideApproval(id, approve) {
+  const url = approve
+    ? `/api/v1/ops/approvals/${encodeURIComponent(id)}/confirm`
+    : `/api/v1/ops/approvals/${encodeURIComponent(id)}/reject`;
+  const res = await apiFetch(url, { method: "POST" }).then((r) => r.json());
+  if (!res.ok) {
+    showToast((approve ? "批准" : "拒绝") + "失败：" + (res.message || res.detail || ""), true);
+    return;
+  }
+  showToast(approve ? `已批准 ${id}\n请让发起人点「检查状态并继续」` : `已拒绝 ${id}`);
+  loadApprovals();
+}
+
+function renderMine() {
+  const card = document.getElementById("myApprovalCard");
+  if (!pendingMine.length) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "";
+  document.getElementById("myApprovalSummary").textContent = `（${pendingMine.length}）`;
+  document.getElementById("myApprovalRows").innerHTML = pendingMine.map((p) => `<tr>
+      <td>${esc(p.label)}</td><td>${esc(p.impact || "-")}</td>
+      <td><code>${esc(p.id)}</code></td>
+      <td>
+        <button data-check="${esc(p.id)}">检查状态并继续</button>
+        <button data-drop="${esc(p.id)}">移除</button>
+      </td></tr>`).join("");
+
+  document.querySelectorAll("#myApprovalRows [data-check]").forEach((btn) => {
+    btn.onclick = () => continueAfterApproval(btn.dataset.check);
+  });
+  document.querySelectorAll("#myApprovalRows [data-drop]").forEach((btn) => {
+    btn.onclick = () => {
+      pendingMine = pendingMine.filter((p) => p.id !== btn.dataset.drop);
+      renderMine();
+    };
+  });
+}
+
+async function continueAfterApproval(id) {
+  const entry = pendingMine.find((p) => p.id === id);
+  if (!entry) return;
+  const ticket = await apiFetch(`/api/v1/ops/approvals/${encodeURIComponent(id)}`).then((r) => r.json());
+  if (ticket.status === "pending") {
+    showToast("管理员还没批，稍后再点一次");
+    return;
+  }
+  if (ticket.status === "rejected") {
+    pendingMine = pendingMine.filter((p) => p.id !== id);
+    renderMine();
+    showToast("该申请已被拒绝，操作不会执行", true);
+    return;
+  }
+  if (ticket.status !== "confirmed") {
+    showToast(`票据状态是 ${ticket.status}，无法继续`, true);
+    return;
+  }
+  const data = await apiFetch(entry.url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...entry.payload, approval_token: id }),
+  }).then((r) => r.json());
+  pendingMine = pendingMine.filter((p) => p.id !== id);
+  renderMine();
+  if (data.status === "executed") {
+    showToast("已执行：" + (entry.label || "操作完成"));
+  } else if (data.status === "blocked") {
+    showToast("已阻断：" + data.message, true);
+  } else {
+    showToast(`状态：${data.status}（${data.message || ""}）`, true);
+  }
+  loadOps();
 }
 
 // ── 手动操作 ────────────────────────────────────────────────
@@ -1279,6 +1423,19 @@ async function cleanCache() {
 }
 
 // 审批 → 带票据重试。审批是权限动作，只有管理员能批。
+// 记住自己提的申请（同票据只记一次），供"检查状态并继续"用
+function rememberMine(id, url, body, approval) {
+  if (!id || pendingMine.some((p) => p.id === id)) return;
+  pendingMine.push({
+    id,
+    url,
+    payload: body,
+    label: approval.impact || approval.tool || "删除操作",
+    impact: approval.impact || "",
+  });
+  renderMine();
+}
+
 async function approveAndRetry(needs, url, body) {
   const approval = needs.approval || {};
   const id = approval.approval_id;
