@@ -25,7 +25,50 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "test_kb"
-SUFFIXES = {".md", ".txt", ".docx", ".pdf"}
+SUFFIXES = {".md", ".txt", ".docx", ".pdf", ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".bmp"}
+
+_ocr_engine = None
+
+
+def _get_ocr():
+    """懒加载 OCR 引擎（首次加载模型约 1 秒，别在 import 时做）。"""
+    global _ocr_engine
+    if _ocr_engine is None:
+        from rapidocr_onnxruntime import RapidOCR
+
+        _ocr_engine = RapidOCR()
+    return _ocr_engine
+
+
+def _ocr_image(path: Path) -> str:
+    """对图片做 OCR，返回识别出的文字。"""
+    result, _ = _get_ocr()(str(path))
+    if not result:
+        return ""
+    return "\n".join(line[1] for line in result if len(line) > 1)
+
+
+def _read_pptx(path: Path) -> str:
+    """PPT/PPTX：按页提取文本框 + 表格文字。"""
+    from pptx import Presentation
+
+    prs = Presentation(str(path))
+    parts: list[str] = []
+    for index, slide in enumerate(prs.slides, start=1):
+        texts: list[str] = []
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False):
+                text = shape.text_frame.text.strip()
+                if text:
+                    texts.append(text)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        texts.append(" | ".join(cells))
+        if texts:
+            parts.append(f"第 {index} 页\n" + "\n".join(texts))
+    return "\n\n".join(parts)
 
 
 def _read_text(path: Path) -> str:
@@ -44,17 +87,27 @@ def _read_docx(path: Path) -> str:
 
 
 def _read_pdf(path: Path) -> str:
+    """PDF：优先抽文字层；某页没有文字层说明是扫描件，转图片走 OCR。"""
     parts: list[str] = []
     with pymupdf.open(str(path)) as pdf:
         for page in pdf:
             text = page.get_text().strip()
-            if not text:
+            if text:
+                # PDF 里的换行多半是排版换行而非段落，中文直接接起来；
+                # 空行（\n\n）才当作段落分隔。
+                parts.append(re.sub(r"(?<!\n)\n(?!\n)", "", text))
                 continue
-            # PDF 里的换行多半是排版换行而非段落，中文直接接起来；
-            # 空行（\n\n）才当作段落分隔。
-            text = re.sub(r"(?<!\n)\n(?!\n)", "", text)
-            parts.append(text)
+
+            pix = page.get_pixmap(dpi=200)
+            result, _ = _get_ocr()(pix.tobytes("png"))
+            if result:
+                parts.append("\n".join(line[1] for line in result if len(line) > 1))
+                logger.info("ingest.pdf_page_ocred", file=path.name, page=page.number + 1)
     return "\n\n".join(parts)
+
+
+def _read_image(path: Path) -> str:
+    return _ocr_image(path)
 
 
 _READERS = {
@@ -62,6 +115,12 @@ _READERS = {
     ".txt": _read_text,
     ".docx": _read_docx,
     ".pdf": _read_pdf,
+    ".pptx": _read_pptx,
+    ".ppt": _read_pptx,
+    ".png": _read_image,
+    ".jpg": _read_image,
+    ".jpeg": _read_image,
+    ".bmp": _read_image,
 }
 
 

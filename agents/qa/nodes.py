@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, Field
 
 from agents.qa.cache import get_answer_cache
+from agents.qa.classifier import get_classifier
 from agents.qa.faq import get_faq_store
 from agents.qa.prompts import (
     CLASSIFY_SYSTEM,
@@ -109,24 +110,43 @@ async def cache_write_node(state: QAState) -> dict[str, Any]:
 
 
 async def classify_node(state: QAState) -> dict[str, Any]:
-    """① 判断问题要不要查知识库。分类失败时保守地走专业咨询。"""
+    """① 判断问题要不要查知识库。
+
+    优先用本地 BERT（快、免费）；模型不可用时退回 LLM 分类；两者都失败则保守走专业咨询。
+    """
     query = _extract_query(state)
     if not query:
         return {"query_type": "GENERAL", "original_query": ""}
 
-    try:
-        llm = LLMFactory.get_structured_llm("qa", QueryCategory)
-        result = await llm.ainvoke(
-            [
-                SystemMessage(content=CLASSIFY_SYSTEM),
-                HumanMessage(content=CLASSIFY_USER.format(query=query)),
-            ]
-        )
-        category = result.category if isinstance(result, QueryCategory) else "PROFESSIONAL"
-        logger.info("qa.classified", query=query, category=category)
-    except Exception as exc:
-        logger.warning("qa.classify_failed", error=str(exc))
-        category = "PROFESSIONAL"
+    category = ""
+    classifier = get_classifier()
+    if classifier is not None:
+        try:
+            category, confidence = await classifier.apredict(query)
+            logger.info(
+                "qa.classified",
+                query=query,
+                category=category,
+                via="bert",
+                confidence=round(confidence, 3),
+            )
+        except Exception as exc:
+            logger.warning("qa.classifier_infer_failed", error=str(exc))
+
+    if not category:
+        try:
+            llm = LLMFactory.get_structured_llm("qa", QueryCategory)
+            result = await llm.ainvoke(
+                [
+                    SystemMessage(content=CLASSIFY_SYSTEM),
+                    HumanMessage(content=CLASSIFY_USER.format(query=query)),
+                ]
+            )
+            category = result.category if isinstance(result, QueryCategory) else "PROFESSIONAL"
+            logger.info("qa.classified", query=query, category=category, via="llm")
+        except Exception as exc:
+            logger.warning("qa.classify_failed", error=str(exc))
+            category = "PROFESSIONAL"
 
     return {"query_type": category, "original_query": query}
 
@@ -185,9 +205,10 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
     """③ 按选定策略检索，把命中结果写进 ranked_chunks。"""
     query = state.get("original_query", "")
     strategy = state.get("retrieval_strategy") or DIRECT
+    source_filter = state.get("source") or None  # 前端可传 source 限定学科/来源
 
     store = get_vector_store()
-    docs = await run_strategy(store, strategy, query)
+    docs = await run_strategy(store, strategy, query, source_filter=source_filter)
 
     chunks = [
         {
@@ -202,6 +223,32 @@ async def retrieve_node(state: QAState) -> dict[str, Any]:
     return {"ranked_chunks": chunks, "sources": sources}
 
 
+async def _stream_or_invoke(llm: Any, messages: list[Any]) -> str:
+    """有流式写入器就边生成边推送 token，否则一次性返回。
+
+    流式能力由 LangGraph 的 custom stream 提供：调用方用
+    `astream(stream_mode="custom")` 迭代时，这里 write 出去的内容会实时到达。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+    except Exception:
+        writer = None
+
+    if writer is None:
+        resp = await llm.ainvoke(messages)
+        return str(resp.content).strip()
+
+    parts: list[str] = []
+    async for chunk in llm.astream(messages):
+        text = str(chunk.content or "")
+        if text:
+            parts.append(text)
+            writer(text)
+    return "".join(parts).strip()
+
+
 async def generate_node(state: QAState) -> dict[str, Any]:
     """④ 基于检索结果生成答案。"""
     query = state.get("original_query", "")
@@ -209,7 +256,8 @@ async def generate_node(state: QAState) -> dict[str, Any]:
     context = "\n\n".join(str(c["content"]) for c in chunks) if chunks else ""
 
     llm = LLMFactory.get_llm("qa", temperature=0.2)
-    resp = await llm.ainvoke(
+    answer = await _stream_or_invoke(
+        llm,
         [
             SystemMessage(content=RAG_SYSTEM),
             HumanMessage(
@@ -219,9 +267,8 @@ async def generate_node(state: QAState) -> dict[str, Any]:
                     question=query,
                 )
             ),
-        ]
+        ],
     )
-    answer = str(resp.content).strip()
     logger.info("qa.generated", mode="rag", chars=len(answer), sources=state.get("sources"))
     return {
         "answer": answer,
@@ -235,10 +282,10 @@ async def direct_node(state: QAState) -> dict[str, Any]:
     """通用知识分支：不检索，直接回答。"""
     query = state.get("original_query", "")
     llm = LLMFactory.get_llm("qa", temperature=0.3)
-    resp = await llm.ainvoke(
-        [SystemMessage(content=DIRECT_SYSTEM), HumanMessage(content=_with_history(state, query))]
+    answer = await _stream_or_invoke(
+        llm,
+        [SystemMessage(content=DIRECT_SYSTEM), HumanMessage(content=_with_history(state, query))],
     )
-    answer = str(resp.content).strip()
     logger.info("qa.generated", mode="llm_direct", chars=len(answer))
     return {
         "answer": answer,

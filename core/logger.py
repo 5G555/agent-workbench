@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -24,6 +26,7 @@ import structlog
 from config import get_settings
 
 _handler: logging.Handler | None = None
+_file_handler: logging.Handler | None = None
 
 _DEV_ENVS = {"local", "dev", "development"}
 
@@ -46,7 +49,7 @@ def configure_logging(level: str | None = None, *, force: bool = False) -> None:
     level 不传时取 settings.log_level；app_env 为 local/dev 时输出彩色控制台，
     否则输出一行一条的 JSON。
     """
-    global _handler
+    global _handler, _file_handler
 
     if _handler is not None and not force:
         return
@@ -83,9 +86,25 @@ def configure_logging(level: str | None = None, *, force: bool = False) -> None:
     if _handler is not None:
         root.removeHandler(_handler)
     root.addHandler(handler)
+
+    # 同时落文件：var/logs/app.log，按大小滚动，方便排查历史问题
+    if _file_handler is not None:
+        root.removeHandler(_file_handler)
+    log_dir = Path(settings.checkpoint_db_url.split("///")[-1]).parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        log_dir / "app.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
+
     root.setLevel(log_level)
 
     _handler = handler
+    _file_handler = file_handler
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

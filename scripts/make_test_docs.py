@@ -109,7 +109,83 @@ def build_pdf(path: Path) -> None:
     print(f"已生成 {path.name}")
 
 
+def build_pptx(path: Path) -> None:
+    """生成一份 PPT，用来验证 pptx 解析。"""
+    from pptx import Presentation
+    from pptx.util import Pt as PptPt
+
+    prs = Presentation()
+    title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+    title_slide.shapes.title.text = "智能客服平台 · 培训课件"
+    title_slide.placeholders[1].text = "新员工入职培训 · 第二讲"
+
+    slides = [
+        (
+            "一、产品定位",
+            ["面向中小企业的智能客服平台", "五个渠道统一接入", "大模型自动答疑 + 人工兜底"],
+        ),
+        (
+            "二、核心流程",
+            ["客户提问 → 意图分类", "专业问题 → 知识库检索 → 生成回答", "闲聊 → 直接由模型回答"],
+        ),
+        (
+            "三、常见误区",
+            [
+                "以为知识库导入即可用，实际需要调切分粒度",
+                "把 FAQ 表当成知识库，两者互补而非替代",
+            ],
+        ),
+    ]
+    for title, bullets in slides:
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = title
+        body = slide.placeholders[1].text_frame
+        body.text = bullets[0]
+        for line in bullets[1:]:
+            para = body.add_paragraph()
+            para.text = line
+            para.font.size = PptPt(18)
+    prs.save(path)
+    print(f"已生成 {path.name}")
+
+
+def build_scanned_pdf(path: Path) -> None:
+    """生成一份"扫描版"PDF：先画文字，再整页转成图片写进新 PDF，没有文字层，只能靠 OCR 读。"""
+    src = pymupdf.open()
+    page = src.new_page()
+    page.insert_font(fontname="simhei", fontfile=str(CJK_FONT))
+    lines = [
+        ("智能客服平台 · 值班手册（扫描件）", 16),
+        ("", 10),
+        ("一、值班时间", 12),
+        ("7×24 小时轮班，白班 9:00-21:00，夜班 21:00-次日 9:00。", 11),
+        ("", 10),
+        ("二、告警分级", 12),
+        ("P1 立即电话通知值班经理，P2 15 分钟内响应，P3 次日处理。", 11),
+        ("", 10),
+        ("三、交接班要求", 12),
+        ("交接时必须在群里同步未闭环工单编号与当前进展。", 11),
+    ]
+    y = 60.0
+    for text, size in lines:
+        if text:
+            page.insert_text((50, y), text, fontname="simhei", fontsize=size)
+        y += size + 10
+
+    pix = page.get_pixmap(dpi=150)
+    src.close()
+
+    out = pymupdf.open()
+    out_page = out.new_page(width=pix.width * 72 / 150, height=pix.height * 72 / 150)
+    out_page.insert_image(out_page.rect, stream=pix.tobytes("png"))
+    out.save(path)
+    out.close()
+    print(f"已生成 {path.name}（无文字层，需 OCR）")
+
+
 if __name__ == "__main__":
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     build_docx(OUT_DIR / "04_安装与部署.docx")
     build_pdf(OUT_DIR / "05_常见故障排查.pdf")
+    build_pptx(OUT_DIR / "06_培训课件.pptx")
+    build_scanned_pdf(OUT_DIR / "07_值班手册_扫描版.pdf")

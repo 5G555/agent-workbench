@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # 阈值受样本量影响：FAQ 条数少时分布更"平"，容易误命中，需要调高。
     faq_threshold: float = 0.85
 
+    # ── 本地意图分类器 ──
+    # 默认关闭：现成的 bert_query_classifier 是在"教育学科"语料上微调的，
+    # 对业务类问题（"你们怎么收费"）会一律判成通用知识，反而比 LLM 差。
+    # 用自己的问答数据重新微调后，把这里改成 true 即可启用。
+    classifier_enabled: bool = False
+
     # ── Redis 答案缓存 ──
     # 缓存的是"完整回答"，不是问题列表（问题列表已常驻内存）。
     # Redis 挂了会自动降级为不缓存，不影响问答主流程。

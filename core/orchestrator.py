@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from core.exceptions import PipelineError
@@ -153,6 +155,70 @@ class Orchestrator:
                 error_msg=str(e),
             )
 
+    def _build_state(self, request: AgentRequest) -> dict[str, Any]:
+        """构建图的初始 State。
+
+        context 里的 history（[{role, content}, ...]）会被转成消息，放在本轮用户消息之前，
+        这样多轮对话的上下文能传给模型；其余 context 字段平铺进 State（如 source 过滤）。
+        """
+        messages: list[Any] = []
+        for item in request.context.get("history") or []:
+            role = str(item.get("role", "")).lower()
+            content = str(item.get("content", ""))
+            if not content:
+                continue
+            messages.append(
+                HumanMessage(content=content) if role == "user" else AIMessage(content=content)
+            )
+        messages.append(HumanMessage(content=request.user_message))
+
+        extra = {k: v for k, v in request.context.items() if k != "history"}
+        return {
+            "messages": messages,
+            # 显式带上本轮问题：checkpointer 会恢复上一轮的 original_query，
+            # 不覆盖就会拿旧问题去查缓存/检索
+            "original_query": request.user_message,
+            "user_id": request.user_id,
+            "tenant_id": request.tenant_id,
+            "session_id": request.session_id,
+            **extra,
+        }
+
+    @staticmethod
+    def _thread_id(request: AgentRequest) -> str:
+        """每次请求用独立 thread，避免 checkpointer 把上一轮状态带进来。
+
+        多轮上下文由 context["history"]（Postgres）提供，不依赖 checkpoint；
+        等以后要做"断点续跑/人工介入"时，再改成按 session 复用 thread。
+        """
+        return f"{request.thread_id}:{uuid.uuid4().hex[:8]}"
+
+    async def stream(self, request: AgentRequest) -> AsyncIterator[dict[str, Any]]:
+        """流式执行：先推节点进度，再推生成的 token。
+
+        Yields:
+            {"type": "node",  "name": "classify", ...}
+            {"type": "token", "data": "..."}
+            {"type": "done",  "answer": "...", "sources": [...]}
+        """
+        graph = self._get_agent_graph(request.agent_type)
+        state = self._build_state(request)
+        config = {"configurable": {"thread_id": self._thread_id(request)}}
+
+        async for mode, chunk in graph.astream(state, config, stream_mode=["custom", "updates"]):
+            if mode == "custom":
+                yield {"type": "token", "data": str(chunk)}
+                continue
+            for node, update in chunk.items():
+                yield {"type": "node", "name": node, "data": update or {}}
+                if isinstance(update, dict) and update.get("answer"):
+                    yield {
+                        "type": "done",
+                        "answer": update.get("answer"),
+                        "sources": update.get("sources") or [],
+                        "mode": update.get("answer_mode"),
+                    }
+
     async def _run_single_agent(self, request: AgentRequest) -> AgentResponse:
         """
         单 Agent 直达模式：直接调用目标 Agent 的 LangGraph 图。
@@ -164,17 +230,11 @@ class Orchestrator:
         graph = self._get_agent_graph(request.agent_type)  # 懒加载取出目标 Agent 图
 
         # 构建 LangGraph 输入 State（统一三件套 + context 展开）
-        initial_state = {
-            "messages": [HumanMessage(content=request.user_message)],  # 用户消息
-            "user_id": request.user_id,
-            "tenant_id": request.tenant_id,
-            "session_id": request.session_id,
-            **request.context,  # 附加上下文（如文件路径、简历结果）平铺进 State
-        }
+        initial_state = self._build_state(request)
 
         config = {  # LangGraph 运行配置
             "configurable": {
-                "thread_id": request.thread_id,  # 用 thread_id 命中 MemorySaver 检查点
+                "thread_id": self._thread_id(request),  # 每次请求独立 thread
             }
         }
 
