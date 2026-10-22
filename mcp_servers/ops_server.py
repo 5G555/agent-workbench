@@ -1,20 +1,24 @@
-"""爬虫能力的 MCP 服务：把采集/导出/清理包装成模型可调用的工具。
+"""运维能力的 MCP 服务：爬取任务管理 + 缓存巡检。
 
-为什么要走 MCP 而不是直接调函数：
-    清理、导出这类操作用户是用自然语言提的（"把 7 天前的导出清掉"），
-    需要模型自己挑工具、填参数。MCP 把"能做什么"以 schema 暴露给模型，
-    模型不需要知道背后是 Postgres 还是文件系统。
+为什么叫 ops 而不是 crawler：
+    这里暴露的是"运维动作"——查任务、导出、清文件、清缓存。
+    采集本身（crawl）只是其中一个工具。以后再加数据备份、重建索引，
+    都放这个服务里，不用再开新端口。
 
-与 web_search 服务分开（不同端口）：
-    web_search 是纯外网工具、无状态；这个服务要连数据库、会改文件，
+为什么与 web_search 分开：
+    web_search 是纯外网、无状态；这个服务要连数据库、改文件、动 Redis，
     权限和故障影响完全不同，混在一个进程里不好控。
 
-启动：
-    python -m mcp_servers.crawler_server          # 默认 127.0.0.1:8766
+工具清单：
+    crawl           抓一个网址落库（有副作用）
+    list_tasks      列最近任务
+    task_records    看结构化记录
+    export_files    导出成文件
+    clean_exports   清导出目录（默认 dry-run）
+    cache_stats     缓存概览（版本、键数、残留）
+    clean_cache     清旧版本缓存键（默认 dry-run）
 
-安全：
-    清理工具默认 dry-run（apply=False 只报告会删什么），
-    模型要真删必须显式把 apply 传成 true，且删库另需 allow_db。
+启动：python -m mcp_servers.ops_server        # 默认 127.0.0.1:8766
 """
 
 from __future__ import annotations
@@ -33,17 +37,20 @@ from agents.crawler.cleaner import (
 from agents.crawler.exporter import export_task
 from agents.crawler.store import get_crawl_store
 from config import get_settings
+from core.cache_maintenance import clean as clean_cache_keys
+from core.cache_maintenance import overview as cache_overview
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-mcp = FastMCP("crawler-tools", host="127.0.0.1", port=8766)
+mcp = FastMCP("ops-tools", host="127.0.0.1", port=8766)
 
 
 def _tenant(tenant_id: str = "") -> str:
     return tenant_id or get_settings().default_tenant_id
 
 
+# ── 采集任务 ────────────────────────────────────────────────
 @mcp.tool()
 async def crawl(
     entry_url: str,
@@ -108,8 +115,7 @@ async def list_tasks(limit: int = 10, tenant_id: str = "") -> list[dict[str, Any
         limit: 返回条数（1~50）
         tenant_id: 租户，留空用默认租户
     """
-    tasks = await get_crawl_store().recent_tasks(_tenant(tenant_id), max(1, min(limit, 50)))
-    return tasks
+    return await get_crawl_store().recent_tasks(_tenant(tenant_id), max(1, min(limit, 50)))
 
 
 @mcp.tool()
@@ -209,6 +215,58 @@ async def clean_exports(
     }
 
 
+# ── 缓存 ────────────────────────────────────────────────────
+@mcp.tool()
+async def cache_stats() -> dict[str, Any]:
+    """看 Redis 缓存概览：当前版本、键总数、旧版本残留数。
+
+    只读，不消耗也不删除任何缓存。
+    """
+    data = await cache_overview()
+    logger.info("mcp.cache_stats", **data)
+    return {
+        "ok": data["version"] > 0,
+        "version": data["version"],
+        "total_keys": data["total"],
+        "current_version_keys": data["current"],
+        "stale_keys": data["stale"],
+    }
+
+
+@mcp.tool()
+async def clean_cache(apply: bool = False) -> dict[str, Any]:
+    """清理 Redis 里旧版本的缓存键（默认只统计，不真删）。
+
+    只删"版本号不等于当前版本"的键——它们已经再也命不中，只占内存；
+    当前版本的缓存永远不碰，所以清理不会让正在用的缓存失效。
+
+    Args:
+        apply: 是否真正删除（默认 False，只报告会删多少）
+
+    Returns:
+        version / stale / kept / deleted / by_prefix
+    """
+    report = await clean_cache_keys(apply=apply)
+    payload = {
+        "ok": report.version > 0,
+        "dry_run": not apply,
+        "version": report.version,
+        "stale": report.stale_total,
+        "kept": report.kept_total,
+        "deleted": report.deleted,
+        "by_prefix": [
+            {"prefix": scan.label, "stale": len(scan.stale), "kept": scan.kept}
+            for scan in report.scans
+        ],
+    }
+    if report.version == 0:
+        payload["error"] = "Redis 不可用或没有版本号"
+    elif not apply and report.stale_total:
+        payload["hint"] = "确认无误后把 apply 传成 true 才会真正删除"
+    logger.info("mcp.clean_cache", apply=apply, stale=report.stale_total)
+    return payload
+
+
 if __name__ == "__main__":
-    logger.info("crawler.mcp_start", url="http://127.0.0.1:8766/mcp")
+    logger.info("ops.mcp_start", url="http://127.0.0.1:8766/mcp")
     mcp.run(transport="streamable-http")

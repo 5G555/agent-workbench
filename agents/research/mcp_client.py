@@ -2,10 +2,11 @@
 
 支持多个 MCP 服务（按名字区分）：
     web-search  研究 Agent 用（外网搜索/抓页）
-    crawler     运维 Agent 用（任务查询、导出、清理）
+    ops         运维 Agent 用（任务查询/导出/清理/缓存）
+
 
 为什么要分开而不是一个服务：
-    web-search 是纯外网、无状态；crawler 要连库、会改文件。
+    web-search 是纯外网、无状态；ops 要连库、改文件、动 Redis。
     权限和故障面不同，拆开后一边挂了不影响另一边。
 
 单独抽出来还为了断开循环依赖：
@@ -34,8 +35,8 @@ def _server_config(name: str) -> dict:
     精确的嵌套类型会让 pyright 判不兼容。
     """
     settings = get_settings()
-    if name == "crawler":
-        return {"crawler": {"url": settings.crawler_mcp_url, "transport": "streamable_http"}}
+    if name == "ops":
+        return {"ops": {"url": settings.ops_mcp_url, "transport": "streamable_http"}}
     return {"web-search": {"url": settings.web_search_mcp_url, "transport": "streamable_http"}}
 
 

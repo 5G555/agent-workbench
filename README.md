@@ -108,8 +108,8 @@ pyright
 |---|---|---|
 | `qa` | 内部知识库（Milvus + FAQ + Redis 缓存） | `POST /api/v1/qa/ask` |
 | `research` | 公网（经 MCP 调 web_search 工具） | `POST /api/v1/research/ask` |
-''| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
-| `ops` | 管理采集任务（查任务 / 导出 / 清理，经 MCP 工具） | `POST /api/v1/ask`（自动路由） |'
+| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
+| `ops` | 运维（查任务 / 导出 / 清文件 / 清缓存，经 MCP 工具） | `POST /api/v1/ask`（自动路由） |
 
 爬取数据全部存在 PostgreSQL（不落盘）：
 
