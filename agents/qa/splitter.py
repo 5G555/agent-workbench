@@ -5,7 +5,7 @@
   父块大（600 字）→ 送 LLM 时上下文完整，不会把一句话切断
 所以向量只在子块上算，命中后回溯到父块给模型。
 
-切分策略移植自 integrated_qa_system 的 ChineseRecursiveTextSplitter：
+切分策略:ChineseRecursiveTextSplitter：
   按「段落 → 换行 → 句号 → 问号 → 感叹号 → 分号 → 逗号 → 空格」的顺序递归尝试，
   每层切不动了才落到下一层，保证尽量在语义边界断开，而不是数着字符硬切。
 """
