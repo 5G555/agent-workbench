@@ -145,14 +145,32 @@
 .view-hidden { display: none !important; }
 
 /* ── 顶部导航（对话 / 爬虫 分区）── */
-.navtabs { display: flex; gap: 6px; padding: 8px 12px; }
-.navtab {
-  flex: 1; padding: 8px 10px; border-radius: 8px; cursor: pointer;
-  background: rgba(255,255,255,.06); color: inherit; font-size: 13px;
+/* 折叠式分区导航：收起时只占一行，展开后是竖排列表 */
+.navwrap { padding: 6px 12px 10px; }
+.navtoggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-radius: 9px; cursor: pointer; font-size: 13px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: inherit; transition: .15s;
+}
+.navtoggle:hover { background: rgba(255,255,255,.12); }
+.navwrap.open .navtoggle {
+  background: rgba(99,102,241,.24); border-color: rgba(99,102,241,.55); font-weight: 600;
+}
+.navtoggle .caret { transition: transform .15s; opacity: .7; }
+.navwrap.open .navtoggle .caret { transform: rotate(180deg); }
+.navpanel { display: none; flex-direction: column; gap: 6px; margin-top: 8px; }
+.navwrap.open .navpanel { display: flex; }
+.navpanel .navtab {
+  width: 100%; text-align: left; padding: 8px 12px; border-radius: 9px; cursor: pointer;
+  background: rgba(255,255,255,.05); color: inherit; font-size: 13px;
   border: 1px solid transparent; transition: .15s;
 }
-.navtab:hover { background: rgba(255,255,255,.12); }
-.navtab.active { background: rgba(99,102,241,.28); border-color: rgba(99,102,241,.6); font-weight: 600; }
+.navpanel .navtab:hover { background: rgba(255,255,255,.12); }
+.navpanel .navtab.active {
+  background: rgba(99,102,241,.28); border-color: rgba(99,102,241,.6); font-weight: 600;
+}
+.navpanel .actions { display: flex; gap: 8px; margin-top: 4px; }
 
 /* ── 爬虫分区 ── */
 .crawler-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
@@ -267,15 +285,21 @@
 
 <aside>
   <div class="brand">Myagent<small>企业知识库问答</small></div>
-  <nav class="navtabs">
-    <button class="navtab active" data-view="chat">💬 对话</button>
-    <button class="navtab" data-view="crawler">🕷️ 爬虫</button>
-    <button class="navtab" data-view="ops">🛠️ 运维</button>
-    <button class="navtab" data-view="analyst">📊 分析</button>
-  </nav>
-  <div class="actions">
-    <button class="primary" id="newSession">＋ 新会话</button>
-    <button id="logoutBtn">退出</button>
+  <div class="navwrap" id="navWrap">
+    <button class="navtoggle" id="navToggle">
+      <span id="navCurrent">💬 对话</span>
+      <span class="caret">▾</span>
+    </button>
+    <div class="navpanel" id="navPanel">
+      <button class="navtab active" data-view="chat">💬 对话</button>
+      <button class="navtab" data-view="crawler">🕷️ 爬虫</button>
+      <button class="navtab" data-view="ops">🛠️ 运维</button>
+      <button class="navtab" data-view="analyst">📊 分析</button>
+      <div class="actions">
+        <button class="primary" id="newSession">＋ 新会话</button>
+        <button id="logoutBtn">退出</button>
+      </div>
+    </div>
   </div>
   <div class="sessions" id="sessions"></div>
 </aside>
@@ -1164,8 +1188,24 @@ function showToast(text, isError = false) {
   toastTimer = setTimeout(() => box.classList.add("hidden"), 9000);
 }
 
+const NAV_LABELS = {
+  chat: "💬 对话", crawler: "🕷️ 爬虫", ops: "🛠️ 运维", analyst: "📊 分析",
+};
+const navWrap = document.getElementById("navWrap");
+document.getElementById("navToggle").onclick = () => {
+  navWrap.classList.toggle("open");
+};
 document.querySelectorAll(".navtab").forEach((btn) => {
-  btn.onclick = () => switchView(btn.dataset.view);
+  btn.onclick = () => {
+    switchView(btn.dataset.view);
+    // 选完就收起，把侧边栏空间还给会话列表
+    document.getElementById("navCurrent").textContent = NAV_LABELS[btn.dataset.view] || btn.textContent.trim();
+    navWrap.classList.remove("open");
+  };
+});
+// 点侧边栏外面也收起
+document.addEventListener("click", (event) => {
+  if (!navWrap.contains(event.target)) navWrap.classList.remove("open");
 });
 document.getElementById("crawlRun").onclick = runCrawl;
 document.getElementById("crawlRefresh").onclick = loadCrawlTasks;
