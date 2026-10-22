@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -67,6 +69,44 @@ def _with_history(state: QAState, query: str) -> str:
     if history == "无历史对话":
         return query
     return f"【历史对话】\n{history}\n\n【用户问题】\n{query}"
+
+
+# 知识库主题列表的进程内缓存：(时间戳, 主题文本)
+_topics_cache: tuple[float, str] | None = None
+_TOPICS_TTL = 300.0
+
+
+async def _kb_topics() -> str:
+    """从 Milvus 取当前所有文档来源，作为分类提示词的"知识库范围"。
+
+    写死主题清单会随知识库增长而过时（新增值班手册后，"交接班要求"就会被误判成
+    通用知识），所以每次从库里读，5 分钟缓存一次。
+    """
+    global _topics_cache
+    now = time.monotonic()
+    if _topics_cache is not None and now - _topics_cache[0] < _TOPICS_TTL:
+        return _topics_cache[1]
+
+    try:
+        store = get_vector_store()
+
+        def _query() -> list[str]:
+            rows = store.client.query(
+                collection_name=store.collection_name,
+                filter='source != ""',
+                output_fields=["source"],
+                limit=1000,
+            )
+            return sorted({str(r["source"]) for r in rows if r.get("source")})
+
+        sources = await asyncio.to_thread(_query)
+    except Exception as exc:
+        logger.warning("qa.kb_topics_failed", error=str(exc))
+        sources = []
+
+    text = "、".join(sources) if sources else "（暂时没有可检索的资料）"
+    _topics_cache = (now, text)
+    return text
 
 
 # ── 节点 ────────────────────────────────────────────────────
@@ -157,7 +197,9 @@ async def classify_node(state: QAState) -> dict[str, Any]:
             result = await llm.ainvoke(
                 [
                     SystemMessage(content=CLASSIFY_SYSTEM),
-                    HumanMessage(content=CLASSIFY_USER.format(query=query)),
+                    HumanMessage(
+                        content=CLASSIFY_USER.format(query=query, topics=await _kb_topics())
+                    ),
                 ]
             )
             category = result.category if isinstance(result, QueryCategory) else "PROFESSIONAL"
