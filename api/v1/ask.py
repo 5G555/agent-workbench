@@ -41,9 +41,14 @@ router = APIRouter()
 class AskRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
-    mode: Literal["auto", "qa", "research"] = Field(default="auto", description="路由模式")
+    mode: Literal["auto", "qa", "research", "crawler"] = Field(
+        default="auto", description="路由模式；crawler 表示确认后直接抓取"
+    )
     source: str | None = Field(default=None, description="限定检索来源（仅 qa 有效）")
     depth: Literal["fast", "deep"] = Field(default="fast", description="联网检索深度")
+    # 用户确认采集后传入（mode=crawler 时生效）
+    entry_url: str | None = Field(default=None, description="采集入口 URL")
+    goal: str | None = Field(default=None, description="采集目标")
     context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -60,6 +65,9 @@ class AskResponse(BaseModel):
     web_status: str = ""
     # 联网时实际使用的时间窗口（空 = 不限）
     time_range: str = ""
+    # 需要用户确认才能继续时：answer_mode=confirm，confirm 里是待执行的动作
+    need_confirm: bool = False
+    confirm: dict[str, Any] = Field(default_factory=dict)
     fallback_used: bool = False
     error_msg: str | None = None
 
@@ -104,7 +112,11 @@ async def ask(
 
     structured = result.structured or {}
     mode = str(structured.get("answer_mode", ""))
-    if result.success and result.content:
+    confirm = structured.get("confirm") or {}
+    need_confirm = mode == "confirm"
+
+    # 「要不要确认」是过程提示，不写进会话历史（否则多轮上下文里会混入一句反问）
+    if result.success and result.content and not need_confirm:
         await save_turn(user["user_id"], request.session_id, request.message, result.content, mode)
 
     return AskResponse(
@@ -118,6 +130,8 @@ async def ask(
         route=result.metadata.get("route") or {},
         web_status=str(result.metadata.get("web_status") or ""),
         time_range=str(result.metadata.get("time_range") or ""),
+        need_confirm=need_confirm,
+        confirm=confirm if isinstance(confirm, dict) else {},
         fallback_used=result.fallback_used,
         error_msg=result.error_msg,
     )

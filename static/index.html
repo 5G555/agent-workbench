@@ -549,6 +549,7 @@ async function askStream(message, bubble) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "", answer = "", answerMode = "", sources = [], note = "";
+  let confirmInfo = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -574,6 +575,11 @@ async function askStream(message, bubble) {
       } else if (ev.type === "escalate") {
         note = "知识库未命中，已转联网检索";
         answer = "";
+      } else if (ev.type === "confirm") {
+        confirmInfo = {
+          agent: ev.agent, entry_url: ev.entry_url,
+          goal: ev.goal, question: ev.question,
+        };
       } else if (ev.type === "final") {
         answerMode = ev.mode || answerMode;
         if (ev.answer && !answer) answer = ev.answer;
@@ -585,6 +591,7 @@ async function askStream(message, bubble) {
   bubble.classList.remove("cursor");
   bubble.innerHTML = renderMarkdown(answer);
   renderMeta(bubble, answerMode, sources, note);
+  if (confirmInfo) renderConfirm(bubble, confirmInfo);
 }
 
 async function askOnce(message, bubble) {
@@ -605,6 +612,45 @@ async function askOnce(message, bubble) {
   if (data.escalated) note = "知识库未命中，已转联网检索";
   else if (data.route && data.route.agent) note = "自动路由 → " + data.route.agent;
   renderMeta(bubble, answerMode, data.sources || [], note);
+  if (data.need_confirm && data.confirm) renderConfirm(bubble, data.confirm);
+}
+
+// 采集类意图的确认：有入口 URL 才给"确认抓取"，否则只是提示用户补 URL
+function renderConfirm(bubble, info) {
+  const box = document.createElement("div");
+  box.className = "tools";
+  if (info.entry_url) {
+    const ok = document.createElement("button");
+    ok.textContent = "✅ 确认抓取";
+    ok.onclick = async () => {
+      box.remove();
+      const target = addRow("assistant", "正在抓取，请稍候…");
+      try {
+        const res = await apiFetch("/api/v1/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: currentSession,
+            message: info.goal || "抓取页面",
+            mode: "crawler",
+            entry_url: info.entry_url,
+            goal: info.goal || "",
+          }),
+        });
+        const data = await res.json();
+        target.innerHTML = renderMarkdown(data.answer || data.error_msg || "（无输出）");
+        renderMeta(target, data.answer_mode || "", [], "已执行采集");
+      } catch (e) {
+        target.textContent = "抓取失败：" + e.message;
+      }
+    };
+    box.appendChild(ok);
+  }
+  const cancel = document.createElement("button");
+  cancel.textContent = "取消";
+  cancel.onclick = () => { box.remove(); addRow("assistant", "好的，已取消。"); };
+  box.appendChild(cancel);
+  bubble.appendChild(box);
 }
 
 async function send() {

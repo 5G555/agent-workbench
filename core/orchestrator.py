@@ -202,18 +202,43 @@ class Orchestrator:
         from agents.supervisor.router import needs_escalation, route
 
         decision = await route(request.user_message, request.tenant_id)
+        route_meta = {
+            "agent": decision.agent,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+        }
+
+        # 需要确认：不跑任何 Agent，直接把问题抛回给用户
+        if decision.need_confirm:
+            logger.info("orchestrator.need_confirm", agent=decision.agent, q=request.user_message)
+            return AgentResponse(
+                success=True,
+                agent_type=AgentType(decision.agent),
+                content=decision.confirm_question,
+                structured={
+                    "answer_mode": "confirm",
+                    "confirm": {
+                        "agent": decision.agent,
+                        "entry_url": decision.entry_url,
+                        "goal": decision.goal or request.user_message,
+                        "question": decision.confirm_question,
+                    },
+                },
+                metadata={"route": route_meta},
+            )
+
         target = AgentType(decision.agent)
         routed_request = request.model_copy(update={"agent_type": target})
         if target == AgentType.QA:
             # 让 qa 内部跳过二次分类，避免两个模型判断冲突
             routed_request.context["force_professional"] = True
+        elif target == AgentType.CRAWLER:
+            # 路由阶段已经解析出入参，直接注入，避免爬虫再问一次
+            routed_request.context["entry_url"] = decision.entry_url
+            routed_request.context["goal"] = decision.goal or request.user_message
 
         result = await self._run_single_agent(routed_request)
-        result.metadata["route"] = {
-            "agent": decision.agent,
-            "confidence": decision.confidence,
-            "reason": decision.reason,
-        }
+        result.metadata["route"] = route_meta
 
         answer_mode = (result.structured or {}).get("answer_mode")
         if target == AgentType.QA and needs_escalation(answer_mode):
@@ -353,10 +378,25 @@ class Orchestrator:
             "reason": decision.reason,
         }
 
+        # 需要确认时只推一个 confirm 事件，不跑 Agent
+        if decision.need_confirm:
+            yield {
+                "type": "confirm",
+                "agent": decision.agent,
+                "entry_url": decision.entry_url,
+                "goal": decision.goal or request.user_message,
+                "question": decision.confirm_question,
+            }
+            yield {"type": "final", "answer": decision.confirm_question, "mode": "confirm"}
+            return
+
         target = AgentType(decision.agent)
         routed_request = request.model_copy(update={"agent_type": target})
         if target == AgentType.QA:
             routed_request.context["force_professional"] = True
+        elif target == AgentType.CRAWLER:
+            routed_request.context["entry_url"] = decision.entry_url
+            routed_request.context["goal"] = decision.goal or request.user_message
 
         final_mode = ""
         final_answer = ""

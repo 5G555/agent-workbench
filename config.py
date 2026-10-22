@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     # 用自己的问答数据重新微调后，把这里改成 true 即可启用。
     classifier_enabled: bool = False
 
+    # ── 意图路由模型（qa / research / crawler 三分类）──
+    # 高置信度直接用本地 BERT（~10ms），低置信度回退给大模型（~1.5s）
+    intent_classifier_enabled: bool = True
+    intent_classifier_path: str = "D:/AI-Models/classifier/intent_router_ft"
+    intent_confidence_threshold: float = 0.70
+
     # ── Redis 答案缓存 ──
     # 缓存的是"完整回答"，不是问题列表（问题列表已常驻内存）。
     # Redis 挂了会自动降级为不缓存，不影响问答主流程。

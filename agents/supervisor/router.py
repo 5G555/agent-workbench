@@ -1,22 +1,32 @@
-"""Supervisor：判断一个问题该交给哪个 Agent。
+"""Supervisor：判断一个问题该交给哪个 Agent，并决定要不要先问用户确认。
 
-为什么不做成一张几百节点的"编排图"：只有两个 Agent 时，路由本质是一个二分类，
-用一次结构化输出足够；等 Agent 变多、需要多步依赖时再升级成 plan-execute 图。
+三个去处：
+    qa        内部知识库（私有、需权限）
+    research  公开互联网（时效、外部事实）
+    crawler   主动采集指定网页（抓数据落库，代价最大）
 
-判断依据：
-    内部知识库的主题清单（运行时从 Milvus 取） → 命中就是 qa
-    需要公开/时效性/外部信息                      → research
-拿不准时默认 qa：本地答错还能升级到 research，反过来则多花一次联网的钱。
+为什么要"先确认"：
+    qa 和 research 都是只读、秒级、无副作用；而 crawler 会真的去访问外部站点、
+    占用带宽、往库里写数据，还可能因为入口给错而白跑一轮。
+    所以凡是"要动手做什么"的意图，先确认一次比直接执行更合适。
+
+确认规则（代码判断，不交给模型）：
+    1. 提到抓取/爬取/采集，且能识别出 URL  → 直接执行（意图明确，动手即所得）
+    2. 提到抓取但没给 URL                  → 需要确认（否则不知道抓哪儿）
+    3. "我想分析竞品价格"这类隐含采集的意图 → 需要确认（代价大，先对齐）
+模型只负责判断"这是不是采集意图"，确认与否由这里的规则决定，便于测试。
 """
 
 from __future__ import annotations
 
-from typing import Literal
+import re
+from typing import Literal, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.qa.nodes import kb_topics
+from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
 
@@ -24,38 +34,180 @@ logger = get_logger(__name__)
 
 ROUTE_SYSTEM = "你是一个请求路由器，只输出 JSON，不解释。"
 
-ROUTE_USER = """系统里有两种数据源，按"数据性质"分派：
+ROUTE_USER = """系统里有三个 Agent，按"要做的事"分派：
 
-A. qa（内部 RAG，自建 pipeline）：资料范围是——{topics}
-   适用于：内部资料、企业私有信息、需要权限控制或必须给出官方口径的问题。
-   这类问题**不能**发到公网去搜（既有泄密风险，也搜不到）。
+A. qa（内部 RAG）：资料范围是——{topics}
+   适用于：内部资料、企业私有信息、需要权限控制、必须给官方口径的问题。
 
-B. research（联网搜索）：去公开互联网检索。
-   适用于：公开可查、有时效性、外部事实（开源框架、行业动态、新闻、第三方产品对比）。
+B. research（联网搜索）：去公开互联网检索并给带引用的答案。
+   适用于：公开可查、有时效性、外部事实（框架文档、行业动态、新闻、产品对比）。
+
+C. crawler（网页采集）：主动抓取指定页面并落库，供后续分析。
+   适用于：明确要求"抓取/爬取/采集某个网站的数据"、"把这些页面存下来"。
 
 判断顺序：
-1. 问题需要本企业内部资料、账号数据、制度流程 → qa
-2. 问题是公开的、需要最新信息 → research
-3. 两边都沾边时，看用户真正要的那个事实属于哪边
+1. 要动手采集网页数据 → crawler
+2. 要查本企业内部资料 → qa
+3. 要查公开信息 → research
+4. 拿不准时选 qa（本地答错还能升级到联网）
 
 用户问题：{query}
 
-只返回 JSON：{{"agent": "qa" 或 "research", "confidence": 0~1, "reason": "一句话理由"}}"""
+只返回 JSON：
+{{"agent": "qa" 或 "research" 或 "crawler", "confidence": 0~1, "reason": "一句话理由"}}"""
+
+# 采集意图的关键词
+CRAWL_KEYWORDS = (
+    "抓取",
+    "爬取",
+    "采集",
+    "爬虫",
+    "抓下来",
+    "抓包",
+    "存下来",
+    "入库",
+    "crawl",
+    "scrape",
+    "spider",
+)
+# 隐含采集：想拿"别人的页面数据"做对比分析，但没明说要抓
+IMPLICIT_CRAWL_HINTS = ("竞品", "同行", "对标", "他们网站", "官网数据")
+
+URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\"']+")
+
+
+def detect_url(text: str) -> str:
+    """从自然语言里抽出第一个 URL；没有返回空串。"""
+    match = URL_PATTERN.search(text or "")
+    return match.group(0).rstrip(".,;") if match else ""
+
+
+def mentions_crawl(text: str) -> bool:
+    """是否明确提到采集动作。"""
+    lowered = (text or "").lower()
+    return any(keyword in lowered for keyword in CRAWL_KEYWORDS)
+
+
+def implies_crawl(text: str) -> bool:
+    """是否隐含采集意图（想要别人的页面数据但没明说）。"""
+    lowered = text or ""
+    return any(hint in lowered for hint in IMPLICIT_CRAWL_HINTS)
 
 
 class RouteDecision(BaseModel):
     """路由结果。"""
 
-    agent: Literal["qa", "research"] = Field(default="qa")
+    agent: Literal["qa", "research", "crawler"] = Field(default="qa")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
 
-async def route(query: str, tenant_id: str | None = None) -> RouteDecision:
-    """给问题选一个 Agent。失败时退回 qa（本地答不出还能升级）。"""
-    if not query.strip():
-        return RouteDecision(agent="qa", confidence=1.0, reason="空问题")
+class ResolvedRoute(RouteDecision):
+    """在模型判断之上补齐"要不要确认"与采集参数。"""
 
+    need_confirm: bool = False
+    confirm_question: str = ""
+    entry_url: str = ""
+    goal: str = ""
+
+
+def resolve_confirmation(decision: RouteDecision, query: str) -> ResolvedRoute:
+    """按规则决定是否需要用户确认，并抽出采集参数。
+
+    纯函数：不调模型、不碰 IO，方便单测。
+    """
+    resolved = ResolvedRoute(**decision.model_dump())
+    url = detect_url(query)
+
+    if decision.agent != "crawler":
+        # 非采集意图不确认；但"隐含采集"的请求值得问一句
+        if implies_crawl(query) and not mentions_crawl(query):
+            resolved.need_confirm = True
+            resolved.confirm_question = (
+                "你是想让我去抓取相关网站的数据做分析吗？如果是，请把入口网址发我。"
+            )
+        return resolved
+
+    resolved.entry_url = url
+    resolved.goal = query.strip()
+
+    if not url:
+        resolved.need_confirm = True
+        resolved.confirm_question = (
+            "我需要一个入口网址才能开始抓取（例如 https://example.com/list）。"
+            "把网址发我，我就按你的目标去抓。"
+        )
+        return resolved
+
+    # 有 URL 且明确说要抓 → 意图明确，直接执行
+    if mentions_crawl(query):
+        return resolved
+
+    resolved.need_confirm = True
+    resolved.confirm_question = f"确认要去抓取 {url} 吗？我会抓取若干页面并把结构化记录存进数据库。"
+    return resolved
+
+
+async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
+    """给问题选一个 Agent，并判断是否需确认。
+
+    两级路由：
+        1. 本地 BERT（~10ms）：置信度 ≥ 阈值就直接采信
+        2. 否则回退给大模型（~1.5s）：意图模糊时更稳
+    两级都失败时退回 qa（本地答错还能升级到联网）。
+    """
+    if not query.strip():
+        return ResolvedRoute(agent="qa", confidence=1.0, reason="空问题")
+
+    decision = await _route_local(query)
+    if decision is None:
+        decision = await _route_llm(query, tenant_id)
+
+    resolved = resolve_confirmation(decision, query)
+    logger.info(
+        "supervisor.routed",
+        query=query,
+        agent=resolved.agent,
+        confidence=round(resolved.confidence, 2),
+        need_confirm=resolved.need_confirm,
+        reason=resolved.reason,
+    )
+    return resolved
+
+
+async def _route_local(query: str) -> RouteDecision | None:
+    """本地模型判断；置信度不够返回 None 交给大模型。"""
+    from agents.supervisor.local_router import get_intent_router, should_use_local
+
+    settings = get_settings()
+    router = get_intent_router(settings)
+    if router is None:
+        return None
+
+    try:
+        agent, confidence = await router.apredict(query)
+    except Exception as exc:
+        logger.warning("supervisor.local_route_failed", error=str(exc))
+        return None
+
+    if not should_use_local(confidence, settings.intent_confidence_threshold):
+        logger.info(
+            "supervisor.local_low_confidence",
+            query=query,
+            agent=agent,
+            confidence=round(confidence, 3),
+        )
+        return None
+
+    return RouteDecision(
+        agent=cast(Literal["qa", "research", "crawler"], agent),
+        confidence=confidence,
+        reason="本地意图模型",
+    )
+
+
+async def _route_llm(query: str, tenant_id: str | None = None) -> RouteDecision:
+    """大模型判断：意图模糊、或本地模型不可用时的兜底。"""
     try:
         topics = await kb_topics(tenant_id)
         llm = LLMFactory.get_structured_llm("qa", RouteDecision)
@@ -67,25 +219,16 @@ async def route(query: str, tenant_id: str | None = None) -> RouteDecision:
         )
         if not isinstance(decision, RouteDecision):
             raise ValueError("路由输出类型不符")
+        decision.reason = f"{decision.reason}（大模型）"
+        return decision
     except Exception as exc:
         logger.warning("supervisor.route_failed", error=str(exc))
         return RouteDecision(agent="qa", confidence=0.0, reason=f"路由失败，默认 qa：{exc}")
-
-    logger.info(
-        "supervisor.routed",
-        query=query,
-        agent=decision.agent,
-        confidence=round(decision.confidence, 2),
-        reason=decision.reason,
-    )
-    return decision
 
 
 def needs_escalation(answer_mode: str | None, sources: list[str] | None = None) -> bool:
     """qa 的答案是否"不够用"，需要转 research。
 
-    只在 qa 真的查过知识库但没查到（no_result）时升级：
-        - faq / rag：已有依据，不升级
-        - llm_direct：本来就是闲聊，不该升级
+    只在 qa 真的查过知识库但没查到（no_result）时升级；faq/rag 已有依据不升级。
     """
     return answer_mode == "no_result"
