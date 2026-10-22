@@ -118,7 +118,7 @@ def answer_key(
 ) -> str:
     """缓存键必须含完整的权限范围：租户 + 部门 + 角色。
 
-    只带租户是不够的——财务部和销售部问同一句话，答案不该互相可见；
+    只带租户是不够的——一号部门和二号部门问同一句话，答案不该互相可见；
     普通用户和管理员看到的文档也不同。少一个维度就是越权读缓存。
     """
     digest = hashlib.md5(normalize(query).encode("utf-8"), usedforsecurity=False).hexdigest()

@@ -176,15 +176,15 @@ python -c "import asyncio; from agents.qa.cache import bump_cache_version; print
 | 维度 | 举例 | 作用 |
 |---|---|---|
 | `tenant_id` | `tenant_default` / `tenant_demo` | 公司级隔离，跨租户完全不可见 |
-| `department` | `财务部` / `销售部` / `*` | 部门级；文档 `*` 表示全公司可见 |
+| `department` | `一号部门` / `二号部门` / `*` | 部门级；文档 `*` 表示全公司可见 |
 | `role` | `user` / `admin` | 角色级；文档 `min_role` 表示最低角色要求 |
 
 **检索条件的生成规则**（`RetrievalScope.filter_expr`）：
 
 ```
 管理员（role=admin）：  tenant_id == "t1"
-普通用户（财务部）：    tenant_id == "t1"
-                        and (department == "财务部" or department == "*")
+普通用户（一号部门）：  tenant_id == "t1"
+                        and (department == "一号部门" or department == "*")
                         and min_role in ["user"]
 普通用户（无部门 *）：  tenant_id == "t1" and department == "*" and min_role in ["user"]
 ```
@@ -205,22 +205,25 @@ python -c "import asyncio; from agents.qa.cache import bump_cache_version; print
 ```powershell
 python -m scripts.ingest --reset --tenant tenant_default --department '*' --min-role user
 python -m scripts.ingest data\tenant_demo_kb --tenant tenant_demo
-python -m scripts.ingest data\dept_finance_kb --tenant tenant_default --department 财务部
+python -m scripts.ingest data\dept_one_kb --tenant tenant_default --department 一号部门
 python -m scripts.ingest data\admin_kb --tenant tenant_default --min-role admin
 python -m scripts.ingest_faq --tenant tenant_default
 ```
 
-验证（仓库内带了三套演示数据：公共 / 财务部 / 管理员）：
+验证（仓库内带了三套演示数据：公共 / 一号部门 / 管理员）：
 
 ```
-carol（财务部）问「2026 年市场费用预算是多少」→ 命中 finance_预算与报销
-dave （销售部）问同一句                       → no_result（看不到）
+carol（一号部门）问「2026 年市场费用预算是多少」→ 命中 dept_one_预算与报销
+dave （二号部门）问同一句                     → no_result（看不到）
 root （admin） 问「新增租户需要先做什么」      → 命中 admin_操作手册
-carol（财务部）问同一句                       → no_result（角色不够）
+carol（一号部门）问同一句                     → no_result（角色不够）
 ```
 
-实测可见条数：管理员 74 / 财务部 64 / 销售部 56 / 无部门 56 / 演示租户 8。
+实测可见条数：管理员 75 / 一号部门 65 / 二号部门 56 / 无部门 56 / 演示租户 8。
 
+> 部门名目前用「一号部门 / 二号部门」占位，接入真实组织架构后替换即可
+> （重灌数据，或 `UPDATE users SET department='真实部门'` 后重灌该部门文档）。
+>
 > FAQ 目前只做租户级隔离：FAQ 是人工整理的租户级问答对，通常对全公司口径一致。
 > 若某个部门的 FAQ 需要单独维护，再给它加 `department` 字段即可。
 

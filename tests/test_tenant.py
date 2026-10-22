@@ -42,9 +42,9 @@ def test_cache_key_scoped_by_tenant():
 
 def test_cache_key_scoped_by_department_and_role():
     """同一租户内，不同部门 / 不同角色也不能共用缓存。"""
-    base = answer_key(1, "q", "t1", "财务部", "user")
-    assert base != answer_key(1, "q", "t1", "销售部", "user")
-    assert base != answer_key(1, "q", "t1", "财务部", "admin")
+    base = answer_key(1, "q", "t1", "一号部门", "user")
+    assert base != answer_key(1, "q", "t1", "二号部门", "user")
+    assert base != answer_key(1, "q", "t1", "一号部门", "admin")
 
 
 def test_cache_key_stable_for_same_tenant():
@@ -79,9 +79,9 @@ def test_filter_without_tenant_keeps_role_condition():
 
 # ── 细粒度权限：部门与角色 ────────────────────────────────
 def test_user_sees_own_department_and_public():
-    scope = RetrievalScope(tenant_id="t1", department="销售部", role="user")
+    scope = RetrievalScope(tenant_id="t1", department="二号部门", role="user")
     expr = scope.filter_expr()
-    assert '(department == "销售部" or department == "*")' in expr
+    assert '(department == "二号部门" or department == "*")' in expr
     assert 'min_role in ["user"]' in expr
 
 
@@ -95,7 +95,7 @@ def test_user_without_department_only_sees_public():
 
 
 def test_admin_bypasses_department_and_role():
-    scope = RetrievalScope(tenant_id="t1", department="销售部", role="admin")
+    scope = RetrievalScope(tenant_id="t1", department="二号部门", role="admin")
     expr = scope.filter_expr()
     assert "department" not in expr, "管理员不该被部门限制"
     assert "min_role" not in expr, "管理员能看所有角色级别的文档"
