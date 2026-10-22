@@ -121,13 +121,60 @@ class Orchestrator:
 
         return self._agent_graphs[agent_type]  # 返回（缓存的）编译图
 
-    async def handle_auto(self, request: AgentRequest) -> AgentResponse:
-        """自动模式：先路由，再执行；qa 答不出来时升级到 research。
+    async def _escalate_to_web(self, request: AgentRequest, base: AgentResponse) -> AgentResponse:
+        """把公网证据并进统一作答，而不是让第二个 Agent 另答一遍。
 
-        这是"两个 Agent 协作"的入口：
-            1. supervisor 判断该走哪个 Agent
-            2. qa 返回 no_result（查过知识库但没查到）→ 用同一个问题转 research
-            3. 返回时在 metadata 里标明路由与升级情况，方便排查
+        三道关：
+            1. 权限闸门：涉及内部/敏感信息的问题不往外发（联网搜索处理不了私有权限）
+            2. 脱敏：通过闸门后仍把"我们/你们"这类表述中性化
+            3. 统一作答：公网结果只是补充依据，标注为"公网资料，仅供参考"
+        """
+        from agents.qa.compose import compose_answer
+        from agents.research.collector import collect_web_evidence
+        from agents.research.evidence import EvidenceSet
+        from agents.supervisor.privacy import is_private, sanitize
+
+        private, reason = is_private(request.user_message)
+        if private:
+            logger.info("orchestrator.web_blocked", reason=reason)
+            base.content = (
+                f"{base.content}\n\n"
+                "（这个问题涉及内部信息，出于数据安全考虑不会发送到公网检索。"
+                "请补充内部资料，或联系管理员开通权限。）"
+            )
+            base.metadata["web_blocked"] = reason
+            return base
+
+        safe_query = sanitize(request.user_message)
+        items = await collect_web_evidence(safe_query)
+        if not items:
+            logger.info("orchestrator.web_empty", query=safe_query)
+            return base
+
+        evidence = EvidenceSet()
+        evidence.extend(items)
+        answer, cited = await compose_answer(request.user_message, evidence)
+
+        return AgentResponse(
+            success=True,
+            agent_type=base.agent_type,
+            content=answer,
+            structured={
+                "answer_mode": "web_enhanced",
+                "sources": evidence.sources_labeled(),
+                "citations": cited,
+                "kb_available": False,
+            },
+            metadata={**base.metadata, "escalated_from": "qa", "web_items": len(items)},
+        )
+
+    async def handle_auto(self, request: AgentRequest) -> AgentResponse:
+        """自动模式：按数据性质路由，qa 查不到时用公网证据补充同一份答案。
+
+        路由维度（对应"数据性质"）：
+            公开、时效性、外部事实  → research
+            内部、敏感、需权限控制  → qa（自建 RAG，数据不出域）
+        qa 查不到时的升级不是"换一个 Agent 重答"，而是给统一作答补一层公网证据。
         """
         from agents.supervisor.router import needs_escalation, route
 
@@ -147,18 +194,8 @@ class Orchestrator:
 
         answer_mode = (result.structured or {}).get("answer_mode")
         if target == AgentType.QA and needs_escalation(answer_mode):
-            logger.info("orchestrator.escalating", from_agent="qa", to_agent="research")
-            research_request = request.model_copy(update={"agent_type": AgentType.RESEARCH})
-            escalated = await self._run_single_agent(research_request)
-            if escalated.success and escalated.content:
-                escalated.content = (
-                    f"{result.content}\n\n---\n\n"
-                    f"知识库没有相关资料，以下是联网检索的结果：\n\n{escalated.content}"
-                )
-                escalated.metadata["escalated_from"] = "qa"
-                escalated.metadata["route"] = result.metadata["route"]
-                return escalated
-            logger.warning("orchestrator.escalation_failed", error=escalated.error_msg)
+            logger.info("orchestrator.escalating", from_agent="qa", to="web evidence")
+            return await self._escalate_to_web(request, result)
 
         return result
 
@@ -299,11 +336,28 @@ class Orchestrator:
             yield event
 
         if target == AgentType.QA and needs_escalation(final_mode):
-            logger.info("orchestrator.stream_escalating", to_agent="research")
-            yield {"type": "escalate", "from": "qa", "to": "research", "reason": "知识库无结果"}
-            research_request = request.model_copy(update={"agent_type": AgentType.RESEARCH})
-            async for event in self.stream(research_request):
-                yield event
+            logger.info("orchestrator.stream_escalating", to="web evidence")
+            yield {"type": "escalate", "from": "qa", "to": "web", "reason": "知识库无结果"}
+
+            # 流式里也要走同一套闸门与统一作答，避免和 handle_auto 行为不一致
+            base = AgentResponse(
+                success=True,
+                agent_type=AgentType.QA,
+                content=final_answer,
+                structured={"answer_mode": final_mode},
+            )
+            enhanced = await self._escalate_to_web(request, base)
+            if enhanced.structured and enhanced.structured.get("answer_mode") == "web_enhanced":
+                yield {"type": "token", "data": enhanced.content}
+                yield {
+                    "type": "done",
+                    "answer": enhanced.content,
+                    "sources": enhanced.structured.get("sources") or [],
+                    "mode": "web_enhanced",
+                }
+            else:
+                yield {"type": "token", "data": enhanced.content}
+            yield {"type": "final", "answer": enhanced.content, "mode": "web_enhanced"}
         elif final_answer:
             yield {"type": "final", "answer": final_answer, "mode": final_mode}
 
