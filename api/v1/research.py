@@ -48,6 +48,9 @@ class ResearchResponse(BaseModel):
     search_status: str = ""
     # 实际使用的检索时间窗口（空 = 不限）
     time_range: str = ""
+    # 是否发生了降级（deep→fast / 联网不可用等）
+    degraded: bool = False
+    degrade_reason: str = ""
     fallback_used: bool = False
     error_msg: str | None = None
 
@@ -96,6 +99,8 @@ async def ask(
         subqueries=[str(s) for s in (structured.get("subqueries") or [])],
         search_status=str(result.metadata.get("web_status") or ""),
         time_range=str(result.metadata.get("time_range") or ""),
+        degraded=result.fallback_used,
+        degrade_reason=result.degrade_reason,
         fallback_used=result.fallback_used,
         error_msg=result.error_msg,
     )

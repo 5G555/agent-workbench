@@ -45,6 +45,8 @@ class CrawlResponse(BaseModel):
     records: int = 0
     strategy: str = ""
     stop_reason: str = ""
+    degraded: bool = False
+    degrade_reason: str = ""
     error_msg: str | None = None
 
 
@@ -101,6 +103,8 @@ async def run(
         records=int(structured.get("records") or 0),
         strategy=str(structured.get("strategy") or ""),
         stop_reason=str(structured.get("stop_reason") or ""),
+        degraded=result.fallback_used,
+        degrade_reason=result.degrade_reason,
         error_msg=result.error_msg,
     )
 

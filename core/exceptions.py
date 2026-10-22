@@ -59,3 +59,19 @@ class AuthenticationError(MyAgentBaseError):
     """认证失败。属于【不可重试】异常。"""
 
     pass
+
+
+class WebSearchError(MyAgentBaseError):
+    """联网检索失败（MCP 不可达 / 搜索服务异常）。属于【可重试】异常。"""
+
+
+class CrawlError(MyAgentBaseError):
+    """网页采集失败（目标站点不可达 / 反爬拦截 / 解析失败）。"""
+
+
+class StorageError(MyAgentBaseError):
+    """存储层失败（Postgres / Redis 读写异常）。"""
+
+
+class ModelOutputError(MyAgentBaseError):
+    """模型输出不可解析（结构化输出字段缺失 / JSON 非法）。"""

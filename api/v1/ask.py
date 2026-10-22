@@ -69,6 +69,7 @@ class AskResponse(BaseModel):
     need_confirm: bool = False
     confirm: dict[str, Any] = Field(default_factory=dict)
     fallback_used: bool = False
+    degrade_reason: str = ""
     error_msg: str | None = None
 
 
@@ -133,6 +134,7 @@ async def ask(
         need_confirm=need_confirm,
         confirm=confirm if isinstance(confirm, dict) else {},
         fallback_used=result.fallback_used,
+        degrade_reason=result.degrade_reason,
         error_msg=result.error_msg,
     )
 

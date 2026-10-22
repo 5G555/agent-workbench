@@ -63,6 +63,8 @@ class AgentResponse(BaseModel):
     content: str = Field(default="", description="主要文本响应内容")
     structured: dict[str, Any] | None = Field(default=None, description="结构化数据（评分/报告等）")
     fallback_used: bool = Field(default=False, description="是否触发了降级处理")
+    # 降级原因：retry_exhausted / deep_to_fast / agent_unavailable / system_fallback
+    degrade_reason: str = Field(default="", description="降级原因，空串表示没降级")
     error_msg: str | None = Field(default=None, description="失败时的错误信息")
     metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
 
@@ -495,20 +497,27 @@ class Orchestrator:
         @with_retry(
             agent_type=request.agent_type.value
         )  # 给本次调用套上三层兜底（重试→降级→系统兜底）
-        async def _invoke():
-            return await graph.ainvoke(initial_state, config=config)  # 真正跑 Agent 图
+        async def _invoke(state: dict, config: dict) -> Any:
+            # 参数化是为了让降级层能"换参数重跑"（如 research 的 deep→fast）
+            return await graph.ainvoke(state, config=config)
 
-        result_state = await _invoke()  # 执行（失败时 with_retry 自动处理）
+        result_state = await _invoke(initial_state, config)  # 执行（失败时自动兜底）
 
-        # with_retry 降级时返回的是普通 dict（不是图状态），单独处理：
+        # 降级/系统兜底时返回的是普通 dict（不是图状态），单独处理：
         # 它没有 messages 字段，硬取会 KeyError / IndexError
         if isinstance(result_state, dict) and result_state.get("fallback_used"):
+            reason = str(result_state.get("degrade_reason") or "")
             return AgentResponse(
                 success=True,  # 兜底也算"给到了响应"
                 agent_type=request.agent_type,
                 content=result_state.get("content", ""),
                 structured=result_state.get("structured_output"),
                 fallback_used=True,
+                degrade_reason=reason,
+                metadata={
+                    "degrade_reason": reason,
+                    "system_fallback": bool(result_state.get("system_fallback")),
+                },
             )
 
         messages = result_state.get("messages") or []
