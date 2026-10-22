@@ -271,7 +271,12 @@ async def faq_node(state: QAState) -> dict[str, Any]:
     """
     query = state.get("original_query", "")
     store = await get_faq_store()
-    hit = await store.search(query, tenant_id=_tenant(state))
+    hit = await store.search(
+        query,
+        tenant_id=_tenant(state),
+        department=str(state.get("department") or "*"),
+        role=str(state.get("role") or "user"),
+    )
 
     if hit is None:
         return {"faq_hit": False, "faq_score": 0.0}

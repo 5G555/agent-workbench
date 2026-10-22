@@ -191,14 +191,28 @@ python -c "import asyncio; from agents.qa.cache import bump_cache_version; print
 
 注意 `*` 的两种含义：**文档上**表示全公司可见，**用户上**表示未分配部门（那就只能看公共文档）。
 
-隔离渗透到四层：
+隔离渗透到五层：
 
 | 层 | 隔离方式 |
 |---|---|
 | Milvus | chunk 带 `tenant_id` / `department` / `min_role`，检索表达式永远包含它们 |
 | 主键 | `md5(租户\|部门\|角色\|来源\|内容)`——只用内容哈希会让相同句子跨部门互相覆盖 |
+| FAQ | 表带 `tenant_id` + `department`，按「租户 × 部门」建多份 BM25 索引（详见下） |
 | 答案缓存 | 键含完整范围：`qa:ans:v{ver}:s{scope_hash}:{query_hash}` |
 | 提示词 / 来源列表 | 知识库主题与 `/sources` 都按同一范围过滤 |
+
+**FAQ 的索引范围**：BM25 必须先有候选集再算分（不能算完再过滤，否则会命中看不到的条目），
+所以按范围各建一份索引：
+
+```
+__all__     租户全部条目     （管理员）
+__public__  只有 department='*' （未分配部门的用户）
+一号部门     该部门 + '*' 的条目 （该部门用户）
+```
+
+同一句问题若在公共和部门各有一条，索引里**按问题去重、部门专属优先**——
+不去重的话两条近似文本会互相稀释 BM25 置信度（实测从 0.9 掉到 0.46，直接判未命中）。
+
 
 **灌数据要指定归属**：
 
@@ -207,7 +221,8 @@ python -m scripts.ingest --reset --tenant tenant_default --department '*' --min-
 python -m scripts.ingest data\tenant_demo_kb --tenant tenant_demo
 python -m scripts.ingest data\dept_one_kb --tenant tenant_default --department 一号部门
 python -m scripts.ingest data\admin_kb --tenant tenant_default --min-role admin
-python -m scripts.ingest_faq --tenant tenant_default
+python -m scripts.ingest_faq --tenant tenant_default                      # 全公司公共
+python -m scripts.ingest_faq data\dept_one_faq.csv --department 一号部门   # 部门专属
 ```
 
 验证（仓库内带了三套演示数据：公共 / 一号部门 / 管理员）：
@@ -224,8 +239,9 @@ carol（一号部门）问同一句                     → no_result（角色�
 > 部门名目前用「一号部门 / 二号部门」占位，接入真实组织架构后替换即可
 > （重灌数据，或 `UPDATE users SET department='真实部门'` 后重灌该部门文档）。
 >
-> FAQ 目前只做租户级隔离：FAQ 是人工整理的租户级问答对，通常对全公司口径一致。
-> 若某个部门的 FAQ 需要单独维护，再给它加 `department` 字段即可。
+> FAQ 已支持部门级：公共条目 `department='*'` 对所有部门可见，部门专属条目只有本部门能命中。
+> 实测 `carol`（一号部门）与 `dave`（二号部门）问同一句「你们怎么收费」，
+> 前者拿到部门结算价，后者拿到公共报价。
 
 验证隔离（仓库里带了 `tenant_demo` 的演示数据）：
 

@@ -33,7 +33,7 @@ def read_csv(path: Path) -> list[tuple[str, str, str]]:
 async def main() -> None:
     args = list(sys.argv[1:])
 
-    # --tenant 先摘出来，剩下的才是文件路径
+    # --tenant / --department 先摘出来，剩下的才是文件路径
     tenant = get_settings().default_tenant_id
     if "--tenant" in args:
         i = args.index("--tenant")
@@ -43,12 +43,24 @@ async def main() -> None:
         else:
             del args[i]
 
+    department = "*"
+    if "--department" in args:
+        i = args.index("--department")
+        if i + 1 < len(args):
+            department = args[i + 1]
+            del args[i : i + 2]
+        else:
+            del args[i]
+
     if args and args[0] == "--query":
         query = args[1] if len(args) > 1 else "你们怎么收费"
         store = await get_faq_store()
-        hit = await store.search(query, tenant_id=tenant)
+        hit = await store.search(query, tenant_id=tenant, department=department)
         if hit:
-            print(f"命中！score={hit.score:.3f}  question={hit.question}（租户 {tenant}）")
+            print(
+                f"命中！score={hit.score:.3f}  question={hit.question}"
+                f"（租户 {tenant} / 部门 {department}）"
+            )
             print(f"答案: {hit.answer}")
         else:
             print(f"未命中（租户 {tenant}，分数低于阈值，会转走向量检索）")
@@ -64,13 +76,16 @@ async def main() -> None:
 
     store = FaqStore()
     await store.ensure_table()
-    await store.upsert_many(rows, tenant_id=tenant)
+    await store.upsert_many(rows, tenant_id=tenant, department=department)
 
     # 先 bump 再 reload：reload 会优先读 Redis 里的旧索引，
     # 不先让版本失效，就会拿到"没包含本次导入"的索引。
     version = await bump_cache_version()
     total = await store.reload()
-    print(f"导入 {len(rows)} 条到租户 {tenant}，全库现有 {total} 条，BM25 索引已重建")
+    print(
+        f"导入 {len(rows)} 条到租户 {tenant} / 部门 {department}，"
+        f"全库现有 {total} 条，BM25 索引已重建"
+    )
     print(f"缓存版本号已提升到 {version}，旧缓存失效")
 
 
