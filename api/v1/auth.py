@@ -1,20 +1,27 @@
-"""认证接口：注册、登录、查当前用户。
+"""认证接口：注册、登录、刷新、登出、查当前用户。
 
-JWT 方案参考 EduAgent：登录签发 token，后续请求带 Authorization: Bearer <token>。
+令牌模型（参考 OAuth2 的双令牌思路）：
+    access token   短效（默认 30 分钟），每次请求都带
+    refresh token  长效（默认 7 天），只用来换新的 access
+刷新时做**轮换**：旧的 refresh 立即拉黑，换发新的，旧 token 无法再用。
+登出 = 拉黑当前 refresh token。
+
 密码用标准库 scrypt 哈希，不引入 passlib/bcrypt 以避开版本兼容坑。
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from api.deps import get_current_user
 from config import get_settings
+from core import token_store
 from core.logger import get_logger
-from core.security import create_access_token, verify_password
+from core.security import create_access_token, create_refresh_token, decode_token, verify_password
 from core.users import get_user_store
 
 logger = get_logger(__name__)
@@ -32,13 +39,41 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., description="登录时拿到的刷新令牌")
+
+
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str = ""
     token_type: str = "bearer"
     expires_in: int
+    refresh_expires_in: int = 0
     user_id: str
     role: str
     tenant_id: str
+
+
+def _issue_tokens(user_id: str, role: str, tenant_id: str) -> TokenResponse:
+    """签发一对令牌。"""
+    settings = get_settings()
+    access, access_ttl = create_access_token(user_id=user_id, role=role, tenant_id=tenant_id)
+    refresh, _ = create_refresh_token(user_id=user_id, role=role, tenant_id=tenant_id)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh,
+        expires_in=access_ttl,
+        refresh_expires_in=settings.jwt_refresh_token_expire_days * 86400,
+        user_id=user_id,
+        role=role,
+        tenant_id=tenant_id,
+    )
+
+
+def _remaining_seconds(payload: dict) -> int:
+    """算 token 还剩多少秒（用于设置黑名单 TTL）。"""
+    exp = int(payload.get("exp", 0))
+    return max(0, exp - int(datetime.now(UTC).timestamp()))
 
 
 @router.post("/register", response_model=TokenResponse, summary="注册并直接登录")
@@ -47,17 +82,7 @@ async def register(request: RegisterRequest) -> TokenResponse:
     user = await store.create(request.username, request.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
-
-    token, expires_in = create_access_token(
-        user_id=str(user["id"]), role=user["role"], tenant_id=user["tenant_id"]
-    )
-    return TokenResponse(
-        access_token=token,
-        expires_in=expires_in,
-        user_id=str(user["id"]),
-        role=user["role"],
-        tenant_id=user["tenant_id"],
-    )
+    return _issue_tokens(str(user["id"]), user["role"], user["tenant_id"])
 
 
 @router.post("/login", response_model=TokenResponse, summary="登录")
@@ -76,17 +101,43 @@ async def login(request: LoginRequest) -> TokenResponse:
         logger.info("auth.login_failed", username=request.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
 
-    token, expires_in = create_access_token(
-        user_id=str(user["id"]), role=user["role"], tenant_id=user["tenant_id"]
-    )
     logger.info("auth.login_success", user_id=str(user["id"]), username=user["username"])
-    return TokenResponse(
-        access_token=token,
-        expires_in=expires_in,
-        user_id=str(user["id"]),
-        role=user["role"],
-        tenant_id=user["tenant_id"],
+    return _issue_tokens(str(user["id"]), user["role"], user["tenant_id"])
+
+
+@router.post("/refresh", response_model=TokenResponse, summary="用 refresh 换新令牌（轮换）")
+async def refresh(request: RefreshRequest) -> TokenResponse:
+    try:
+        payload = decode_token(request.refresh_token, expected_type="refresh")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="刷新令牌无效或已过期"
+        ) from exc
+
+    jti = str(payload.get("jti", ""))
+    if await token_store.is_revoked(jti):
+        logger.info("auth.refresh_revoked", jti=jti)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="刷新令牌已失效")
+
+    # 轮换：先作废旧 token，再发新的
+    await token_store.revoke(jti, _remaining_seconds(payload))
+    logger.info("auth.refreshed", user_id=str(payload["sub"]))
+    return _issue_tokens(
+        str(payload["sub"]),
+        str(payload.get("role", "user")),
+        str(payload.get("tenant_id", "tenant_default")),
     )
+
+
+@router.post("/logout", summary="登出（作废当前 refresh）")
+async def logout(request: RefreshRequest) -> dict[str, object]:
+    try:
+        payload = decode_token(request.refresh_token, expected_type="refresh")
+    except Exception:
+        # 已经无效的 token 再登出一次，直接视为成功
+        return {"revoked": False}
+    revoked = await token_store.revoke(str(payload.get("jti", "")), _remaining_seconds(payload))
+    return {"revoked": revoked}
 
 
 @router.get("/me", summary="当前登录用户")

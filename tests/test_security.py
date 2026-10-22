@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from core.exceptions import AuthenticationError
-from core.security import create_access_token, decode_token, hash_password, verify_password
+from core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_password,
+    verify_password,
+)
 
 
 def test_hash_is_not_plaintext_and_verifies():
@@ -46,3 +52,31 @@ def test_tampered_token_rejected():
     broken = token[:-3] + ("aaa" if not token.endswith("aaa") else "bbb")
     with pytest.raises(AuthenticationError):
         decode_token(broken)
+
+
+# ── 双令牌：access 与 refresh 不能混用 ────────────────────
+def test_refresh_token_carries_jti():
+    token, jti = create_refresh_token(user_id="7")
+    assert jti and len(jti) == 32
+    payload = decode_token(token, expected_type="refresh")
+    assert payload["jti"] == jti
+    assert payload["typ"] == "refresh"
+
+
+def test_refresh_cannot_be_used_as_access():
+    """拿 refresh 当 access 用是典型的越权尝试，必须拒绝。"""
+    token, _ = create_refresh_token(user_id="7")
+    with pytest.raises(AuthenticationError):
+        decode_token(token, expected_type="access")
+
+
+def test_access_cannot_be_used_as_refresh():
+    token, _ = create_access_token(user_id="7")
+    with pytest.raises(AuthenticationError):
+        decode_token(token, expected_type="refresh")
+
+
+def test_each_token_has_unique_jti():
+    _, jti1 = create_refresh_token(user_id="7")
+    _, jti2 = create_refresh_token(user_id="7")
+    assert jti1 != jti2

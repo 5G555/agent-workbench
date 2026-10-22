@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 
+import structlog
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -38,16 +39,19 @@ async def get_current_user(
         raise unauthorized
 
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(credentials.credentials, expected_type="access")
     except Exception as exc:
         logger.info("auth.invalid_token", error=str(exc))
         raise unauthorized from exc
 
-    return {
+    user = {
         "user_id": str(payload["sub"]),
         "role": str(payload.get("role", "user")),
         "tenant_id": str(payload.get("tenant_id", s.default_tenant_id)),
     }
+    # 绑进日志上下文：同一次请求的所有日志都会带上 trace_id 和 user_id
+    structlog.contextvars.bind_contextvars(user_id=user["user_id"])
+    return user
 
 
 async def rate_limit(request: Request, user: dict[str, str] = Depends(get_current_user)) -> None:

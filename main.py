@@ -19,6 +19,7 @@ from api.router import api_router
 from config import get_settings
 from core.db import close_pool, get_pool
 from core.logger import configure_logging, get_logger
+from core.trace import TraceMiddleware
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Myagent", version="0.1.0", lifespan=lifespan)
+# 注意顺序：中间件最后添加的最先执行，trace 要包在最外层
+app.add_middleware(TraceMiddleware)
 app.include_router(api_router, prefix="/api")
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

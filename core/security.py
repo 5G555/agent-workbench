@@ -13,6 +13,7 @@ import hmac
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import jwt
 
@@ -73,6 +74,29 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def _encode(
+    user_id: str,
+    token_type: str,
+    role: str,
+    tenant_id: str,
+    expires_seconds: int,
+    settings: Settings,
+) -> tuple[str, str]:
+    """统一签发入口，返回 (token, jti)。"""
+    now = datetime.now(UTC)
+    jti = uuid4().hex
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "typ": token_type,  # access / refresh，防止两种令牌混用
+        "jti": jti,  # 唯一 ID，吊销时按它拉黑
+        "role": role,
+        "tenant_id": tenant_id,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=expires_seconds)).timestamp()),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm), jti
+
+
 def create_access_token(
     user_id: str,
     role: str = "user",
@@ -80,23 +104,32 @@ def create_access_token(
     settings: Settings | None = None,
     expires_minutes: int | None = None,
 ) -> tuple[str, int]:
-    """签发 JWT，返回 (token, 有效期秒数)。"""
+    """短效访问令牌，返回 (token, 有效期秒数)。"""
     s = settings or get_settings()
     minutes = expires_minutes or s.jwt_access_token_expire_minutes
-    now = datetime.now(UTC)
-    payload: dict[str, Any] = {
-        "sub": str(user_id),
-        "role": role,
-        "tenant_id": tenant_id,
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=minutes)).timestamp()),
-    }
-    token = jwt.encode(payload, s.jwt_secret_key, algorithm=s.jwt_algorithm)
+    token, _ = _encode(user_id, "access", role, tenant_id, minutes * 60, s)
     return token, minutes * 60
 
 
-def decode_token(token: str, settings: Settings | None = None) -> dict[str, Any]:
-    """校验并解析 JWT；失败抛 AuthenticationError（调用方转 401）。"""
+def create_refresh_token(
+    user_id: str,
+    role: str = "user",
+    tenant_id: str = "tenant_default",
+    settings: Settings | None = None,
+    expires_days: int | None = None,
+) -> tuple[str, str]:
+    """长效刷新令牌，返回 (token, jti)。"""
+    s = settings or get_settings()
+    days = expires_days or s.jwt_refresh_token_expire_days
+    return _encode(user_id, "refresh", role, tenant_id, days * 86400, s)
+
+
+def decode_token(
+    token: str,
+    expected_type: str = "access",
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """校验并解析 JWT；类型不符或失效都抛 AuthenticationError（调用方转 401）。"""
     s = settings or get_settings()
     try:
         payload = jwt.decode(token, s.jwt_secret_key, algorithms=[s.jwt_algorithm])
@@ -107,4 +140,7 @@ def decode_token(token: str, settings: Settings | None = None) -> dict[str, Any]
 
     if not payload.get("sub"):
         raise AuthenticationError("令牌缺少用户标识")
+    if payload.get("typ", "access") != expected_type:
+        # 用 refresh 当 access 用（或反之）一律拒绝
+        raise AuthenticationError("令牌类型不匹配")
     return payload

@@ -106,9 +106,12 @@ class Settings(BaseSettings):
     checkpoint_db_url: str = CHECKPOINT_DB_URL
 
     # ── JWT 认证 ──
+    # access 短效（泄露窗口小），refresh 长效（换新 access 用，可吊销）。
+    # 注意 HS256 要求密钥足够长，低于 32 字节 PyJWT 会告警。
     jwt_secret_key: str  # 必填
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 10080
+    jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 7
 
     # ── MCP Server 地址 ──
     kb_mcp_server_url: str = "http://localhost:8000/mcp/kb"
