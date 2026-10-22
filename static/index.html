@@ -510,7 +510,14 @@ async function apiFetch(url, opts) {
 }
 
 // ── 登录 ───────────────────────────────────────────────
-function showLogin(msg) { loginBox.classList.remove("hidden"); lerr.textContent = msg || ""; lu.focus(); }
+function showLogin(msg) {
+  // 只在弹层"从隐藏变显示"时抢一次焦点。
+  // 否则后台轮询每次 401 都会调这里，把焦点从密码框抢回用户名框。
+  const wasHidden = loginBox.classList.contains("hidden");
+  loginBox.classList.remove("hidden");
+  lerr.textContent = msg || "";
+  if (wasHidden) lu.focus();
+}
 function hideLogin() { loginBox.classList.add("hidden"); }
 
 async function doAuth(path) {
@@ -1487,9 +1494,10 @@ let approvalTimer = null;
 function startApprovalPolling() {
   if (approvalTimer || !pendingMine.length) return;
   approvalTimer = setInterval(async () => {
+    // 登录框开着（未登录/已失效）时不要轮询：只会连续 401 并打断用户输入
+    if (!loginBox.classList.contains("hidden")) return;
     if (!pendingMine.length) {
-      clearInterval(approvalTimer);
-      approvalTimer = null;
+      stopApprovalPolling();
       return;
     }
     for (const entry of [...pendingMine]) {
@@ -1499,6 +1507,7 @@ function startApprovalPolling() {
           `/api/v1/ops/approvals/${encodeURIComponent(entry.id)}`
         ).then((r) => r.json());
       } catch (e) {
+        if (String(e && e.message).includes("unauthenticated")) stopApprovalPolling();
         continue;
       }
       if (!ticket || ticket.status === "pending") continue;
@@ -1512,6 +1521,13 @@ function startApprovalPolling() {
       }
     }
   }, 5000);
+}
+
+function stopApprovalPolling() {
+  if (approvalTimer) {
+    clearInterval(approvalTimer);
+    approvalTimer = null;
+  }
 }
 
 function dropMine(id) {
