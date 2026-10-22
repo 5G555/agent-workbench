@@ -201,6 +201,28 @@
 .toast.hidden { display: none; }
 .toast code { background: rgba(255,255,255,.1); padding: 2px 5px; border-radius: 4px; }
 
+/* ── 运维分区 ── */
+.opsview { flex: 1; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.opscard { border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 14px 16px; }
+.opscard h3 { margin: 0 0 10px; font-size: 13px; opacity: .75; font-weight: 600; }
+.opscard .statgrid { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 12px; }
+.opscard .statgrid div { font-size: 12px; opacity: .8; }
+.opscard .statgrid b { display: block; font-size: 20px; margin-top: 3px; opacity: 1; }
+.opstable { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 12px; }
+.opstable th, .opstable td {
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.08);
+  max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.opstable th { opacity: .65; font-weight: 600; }
+.opscard .tools { display: flex; gap: 10px; flex-wrap: wrap; }
+.opscard input[type=number], .opscard input:not([type]) {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.25); color: inherit; font-size: 13px;
+}
+.opscard .inputbar { display: flex; gap: 8px; }
+.opscard .inputbar input { flex: 1; }
+#cStale.warn { color: #f59e0b; }
+
   .card { width: 330px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
   .card h2 { margin: 0; font-size: 17px; }
   .card input { height: 40px; padding: 0 12px; border-radius: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); outline: none; font-size: 14px; }
@@ -218,6 +240,7 @@
   <nav class="navtabs">
     <button class="navtab active" data-view="chat">💬 对话</button>
     <button class="navtab" data-view="crawler">🕷️ 爬虫</button>
+    <button class="navtab" data-view="ops">🛠️ 运维</button>
   </nav>
   <div class="actions">
     <button class="primary" id="newSession">＋ 新会话</button>
@@ -287,6 +310,54 @@
     </div>
   </div>
   <div class="toast hidden" id="toast"></div>
+</main>
+
+<main id="viewOps" class="view-hidden">
+  <header>
+    <button class="menu-btn" id="menuBtn3" title="会话列表">☰</button>
+    <h1>运维</h1>
+    <span class="meta" id="opsMeta">缓存与导出目录的巡检、清理</span>
+    <span class="spacer"></span>
+    <button class="pill" id="opsRefresh">刷新</button>
+  </header>
+
+  <div class="opsview">
+    <section class="opscard">
+      <h3>Redis 缓存</h3>
+      <div class="statgrid" id="cacheStats">
+        <div>版本<b id="cVer">-</b></div>
+        <div>键总数<b id="cTotal">-</b></div>
+        <div>当前版本<b id="cCur">-</b></div>
+        <div>旧版本残留<b id="cStale">-</b></div>
+      </div>
+      <div class="tools">
+        <button class="primary" id="cacheClean">清理旧版本</button>
+        <span class="hint" style="opacity:.6;align-self:center">只删旧版本键，当前版本缓存不受影响</span>
+      </div>
+    </section>
+
+    <section class="opscard">
+      <h3>导出目录 <span id="exportSummary" class="hint" style="opacity:.6"></span></h3>
+      <table class="opstable">
+        <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>几天前</th><th>路径</th></tr></thead>
+        <tbody id="exportRows"><tr><td colspan="5" style="opacity:.6">加载中…</td></tr></tbody>
+      </table>
+      <div class="tools">
+        <label style="align-self:center">保留最近 <input id="keepN" type="number" min="0" max="100" value="3" style="width:60px" /> 个</label>
+        <button id="exportPreview">预演</button>
+        <button class="primary" id="exportApply">执行清理</button>
+      </div>
+    </section>
+
+    <section class="opscard">
+      <h3>让 Agent 做</h3>
+      <div class="inputbar">
+        <input id="opsAsk" placeholder="例如：把旧版本的缓存清掉 / 列出最近的爬取任务" />
+        <button class="send" id="opsSend">发送</button>
+      </div>
+      <div id="opsAnswer" class="hint" style="margin-top:10px;white-space:pre-wrap;opacity:.9"></div>
+    </section>
+  </div>
 </main>
 
 <div class="backdrop" id="backdrop"></div>
@@ -973,6 +1044,115 @@ document.querySelectorAll(".navtab").forEach((btn) => {
 document.getElementById("crawlRun").onclick = runCrawl;
 document.getElementById("crawlRefresh").onclick = loadCrawlTasks;
 document.getElementById("menuBtn2").onclick = () => {
+  document.getElementById("backdrop").classList.add("show");
+  document.querySelector("aside").classList.add("show");
+};
+
+// ══════════════════════════════════════════════════════
+// 运维分区：缓存巡检 + 导出目录清理（都是"先预演再执行"）
+// ══════════════════════════════════════════════════════
+async function loadOps() {
+  try {
+    const [cacheRes, exportRes] = await Promise.all([
+      apiFetch("/api/v1/ops/cache").then((r) => r.json()),
+      apiFetch("/api/v1/ops/exports").then((r) => r.json()),
+    ]);
+    document.getElementById("cVer").textContent = cacheRes.version || "-";
+    document.getElementById("cTotal").textContent = cacheRes.total_keys ?? "-";
+    document.getElementById("cCur").textContent = cacheRes.current_keys ?? "-";
+    const staleEl = document.getElementById("cStale");
+    staleEl.textContent = cacheRes.stale_keys ?? "-";
+    staleEl.classList.toggle("warn", (cacheRes.stale_keys || 0) > 0);
+
+    document.getElementById("exportSummary").textContent =
+      `（${exportRes.count} 个，共 ${exportRes.total_human}）`;
+    const rows = exportRes.items || [];
+    document.getElementById("exportRows").innerHTML = rows.length
+      ? rows.map((it) => `<tr>
+          <td>#${it.task_id}</td><td>${it.files}</td><td>${it.size}</td>
+          <td>${it.age_days} 天</td><td>${esc(it.path)}</td></tr>`).join("")
+      : '<tr><td colspan="5" style="opacity:.6">还没有导出目录</td></tr>';
+    document.getElementById("opsMeta").textContent =
+      `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} 个目录`;
+  } catch (e) {
+    showToast("加载运维数据失败：" + e.message, true);
+  }
+}
+
+async function cleanCache() {
+  const first = await apiFetch("/api/v1/ops/cache/clean", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apply: false }),
+  }).then((r) => r.json());
+
+  if (!first.stale) {
+    showToast(`没有旧版本残留（当前 v${first.version}，${first.kept} 个键都是当前版本）`);
+    return;
+  }
+  const ok = confirm(
+    `将删除 ${first.stale} 个旧版本键，保留当前版本 ${first.kept} 个。\n\n继续？`
+  );
+  if (!ok) return;
+
+  const done = await apiFetch("/api/v1/ops/cache/clean", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apply: true }),
+  }).then((r) => r.json());
+  showToast(`已删除 ${done.deleted} 个旧版本键（当前版本 v${done.version} 保留 ${done.kept} 个）`);
+  loadOps();
+}
+
+async function cleanExports(apply) {
+  const keep = Number(document.getElementById("keepN").value);
+  const data = await apiFetch("/api/v1/ops/exports/clean", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep, apply }),
+  }).then((r) => r.json());
+
+  const list = (data.would_delete || data.deleted || []).join(", ");
+  if (apply) {
+    showToast(`已删除 ${(data.deleted || []).length} 个目录，释放 ${data.freed}`);
+    loadOps();
+  } else if (!data.would_delete || !data.would_delete.length) {
+    showToast("没有需要清理的目录");
+  } else {
+    showToast(`预演：会删除任务 ${list}，释放约 ${data.freed}\n确认后点「执行清理」`);
+  }
+}
+
+async function askOps() {
+  const input = document.getElementById("opsAsk");
+  const message = input.value.trim();
+  if (!message) return;
+  const box = document.getElementById("opsAnswer");
+  box.textContent = "思考中…";
+  try {
+    const res = await apiFetch("/api/v1/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: "ops-panel", message, mode: "auto" }),
+    });
+    const data = await res.json();
+    box.textContent = data.answer || data.error_msg || "（无输出）";
+    input.value = "";
+    loadOps();
+  } catch (e) {
+    box.textContent = "请求失败：" + e.message;
+  }
+}
+
+document.getElementById("opsRefresh").onclick = loadOps;
+document.getElementById("cacheClean").onclick = cleanCache;
+document.getElementById("exportPreview").onclick = () => cleanExports(false);
+document.getElementById("exportApply").onclick = () => cleanExports(true);
+document.getElementById("opsSend").onclick = askOps;
+document.getElementById("opsAsk").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") askOps();
+});
+document.getElementById("menuBtn3").onclick = () => {
   document.getElementById("backdrop").classList.add("show");
   document.querySelector("aside").classList.add("show");
 };

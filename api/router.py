@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from api.v1 import ask, auth, crawler, qa, research
+from api.v1 import ask, auth, crawler, ops, qa, research
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/v1/auth", tags=["auth"])
@@ -16,4 +16,5 @@ api_router.include_router(auth.router, prefix="/v1/auth", tags=["auth"])
 api_router.include_router(ask.router, prefix="/v1", tags=["ask"])
 api_router.include_router(qa.router, prefix="/v1/qa", tags=["qa"])
 api_router.include_router(crawler.router, prefix="/v1/crawler", tags=["crawler"])
+api_router.include_router(ops.router, prefix="/v1/ops", tags=["ops"])
 api_router.include_router(research.router, prefix="/v1/research", tags=["research"])
