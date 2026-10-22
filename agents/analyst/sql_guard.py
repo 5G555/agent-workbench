@@ -122,8 +122,9 @@ def validate(sql: str) -> GuardResult:
 
     # 兜底加 LIMIT，防止一次拉全表
     if not re.search(r"\blimit\s+\d+", cleaned, re.I):
-        # SQL 已过白名单与关键字校验，这里只包一层限流
-        cleaned = f"SELECT * FROM ({cleaned}) AS _guard_wrap LIMIT {MAX_ROWS}"  # noqa: S608
+        # 直接在末尾追加 LIMIT：比包一层 SELECT * FROM (...) 更好读，
+        # 面板上展示的 SQL 也更接近模型原本写的那条
+        cleaned = f"{cleaned}\nLIMIT {MAX_ROWS}"
     return GuardResult(ok=True, sql=cleaned)
 
 

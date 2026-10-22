@@ -232,6 +232,22 @@
   color: inherit; cursor: pointer;
 }
 .opstable button:hover { background: rgba(255,255,255,.16); }
+.opscard .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.opscard .chips button {
+  font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  background: rgba(99,102,241,.16); border: 1px solid rgba(99,102,241,.45); color: inherit;
+}
+.opscard .chips button:hover { background: rgba(99,102,241,.3); }
+.opscard button.mini {
+  font-size: 11px; padding: 2px 8px; margin-left: 8px; border-radius: 6px;
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); color: inherit;
+  cursor: pointer;
+}
+.sqlbox {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; overflow: auto;
+  background: #0b0e13; border: 1px solid rgba(255,255,255,.1);
+  font-family: Consolas, monospace; font-size: 12.5px; white-space: pre-wrap;
+}
 .opscard select {
   padding: 7px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16);
   background: rgba(0,0,0,.25); color: inherit; font-size: 12.5px;
@@ -255,6 +271,7 @@
     <button class="navtab active" data-view="chat">💬 对话</button>
     <button class="navtab" data-view="crawler">🕷️ 爬虫</button>
     <button class="navtab" data-view="ops">🛠️ 运维</button>
+    <button class="navtab" data-view="analyst">📊 分析</button>
   </nav>
   <div class="actions">
     <button class="primary" id="newSession">＋ 新会话</button>
@@ -419,6 +436,39 @@
         <button class="send" id="opsSend">发送</button>
       </div>
       <div id="opsAnswer" class="hint" style="margin-top:10px;white-space:pre-wrap;opacity:.9"></div>
+    </section>
+  </div>
+</main>
+
+<main id="viewAnalyst" class="view-hidden">
+  <header>
+    <button class="menu-btn" id="menuBtn4" title="会话列表">☰</button>
+    <h1>数据分析</h1>
+    <span class="meta" id="anaMeta">用自然语言问数据，答案附带执行过的 SQL</span>
+    <span class="spacer"></span>
+    <button class="pill" id="anaCatalog">能问什么</button>
+  </header>
+
+  <div class="opsview">
+    <section class="opscard">
+      <h3>提问</h3>
+      <div class="inputbar">
+        <input id="anaInput" placeholder="例如：这个月有多少会话 / 抓取到的数据里作者分布如何" />
+        <button class="send" id="anaSend">分析</button>
+      </div>
+      <div class="chips" id="anaChips"></div>
+      <div id="anaCatalogBox" class="hint" style="display:none;margin-top:10px;opacity:.85"></div>
+    </section>
+
+    <section class="opscard" id="anaResultCard" style="display:none">
+      <h3>结论 <span id="anaBadge" class="hint" style="opacity:.6"></span></h3>
+      <div id="anaAnswer" class="markdown-body"></div>
+    </section>
+
+    <section class="opscard" id="anaSqlCard" style="display:none">
+      <h3>执行的 SQL <button class="mini" id="anaCopySql">复制</button></h3>
+      <pre id="anaSql" class="sqlbox"></pre>
+      <div id="anaTable"></div>
     </section>
   </div>
 </main>
@@ -938,7 +988,7 @@ function esc(text) {
 
 function switchView(name) {
   // 三个分区都参与切换：没列全的话，切到新分区会出现"全都隐藏"的白屏
-  const views = { chat: "viewChat", crawler: "viewCrawler", ops: "viewOps" };
+  const views = { chat: "viewChat", crawler: "viewCrawler", ops: "viewOps", analyst: "viewAnalyst" };
   Object.entries(views).forEach(([key, id]) => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("view-hidden", key !== name);
@@ -948,6 +998,7 @@ function switchView(name) {
   });
   if (name === "crawler") loadCrawlTasks();
   if (name === "ops") loadOps();
+  if (name === "analyst") loadAnalystCatalog();
 }
 
 let currentTaskId = 0;
@@ -1205,6 +1256,117 @@ async function loadOps() {
       `<tr><td colspan="6" style="color:#ff6b6b">加载失败：${esc(e.message)}</td></tr>`;
   }
 }
+
+// ══════════════════════════════════════════════════════
+// 分析分区：自然语言提问 → 结论 + 实际执行的 SQL + 结果表
+// ══════════════════════════════════════════════════════
+async function loadAnalystCatalog() {
+  try {
+    const data = await apiFetch("/api/v1/analyst/catalog").then((r) => r.json());
+    const chips = document.getElementById("anaChips");
+    chips.innerHTML = "";
+    (data.metrics || []).forEach((m) => {
+      const btn = document.createElement("button");
+      btn.textContent = m.name;
+      btn.title = m.note || m.sql;
+      btn.onclick = () => {
+        document.getElementById("anaInput").value = `${m.name}是多少`;
+        runAnalyze();
+      };
+      chips.appendChild(btn);
+    });
+
+    const box = document.getElementById("anaCatalogBox");
+    box.innerHTML =
+      "<b>可用视图（已按租户隔离）</b><br>" +
+      (data.views || [])
+        .map((v) => `· <code>${esc(v.name)}</code> — ${esc(v.desc)}`)
+        .join("<br>");
+  } catch (e) {
+    showToast("加载数据字典失败：" + e.message, true);
+  }
+}
+
+function renderAnaTable(columns, rows) {
+  const target = document.getElementById("anaTable");
+  if (!columns || !columns.length) {
+    target.innerHTML = "";
+    return;
+  }
+  const head = columns.map((c) => `<th>${esc(c)}</th>`).join("");
+  const body = rows
+    .slice(0, 50)
+    .map((row) => `<tr>${columns.map((c) => `<td>${esc(row[c] ?? "")}</td>`).join("")}</tr>`)
+    .join("");
+  target.innerHTML = `<table class="opstable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function runAnalyze() {
+  const input = document.getElementById("anaInput");
+  const question = input.value.trim();
+  if (!question) return;
+
+  const sendBtn = document.getElementById("anaSend");
+  sendBtn.disabled = true;
+  sendBtn.textContent = "分析中…";
+  document.getElementById("anaMeta").textContent = "正在取数并解读，通常 3~8 秒…";
+
+  try {
+    const res = await apiFetch("/api/v1/analyst/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, session_id: "analyst-panel" }),
+    });
+    const data = await res.json();
+
+    const badge = [];
+    if (data.mode) badge.push(`模式 ${data.mode}`);
+    if (data.row_count) badge.push(`${data.row_count} 行`);
+    if (data.task_id) badge.push(`任务 #${data.task_id}`);
+
+    document.getElementById("anaResultCard").style.display = "";
+    document.getElementById("anaAnswer").innerHTML = renderMarkdown(
+      data.answer || data.error_msg || "（无输出）"
+    );
+    document.getElementById("anaBadge").textContent = badge.length ? `（${badge.join(" / ")}）` : "";
+
+    if (data.sql) {
+      document.getElementById("anaSqlCard").style.display = "";
+      document.getElementById("anaSql").textContent = data.sql;
+      renderAnaTable(data.columns || [], data.rows || []);
+    } else {
+      document.getElementById("anaSqlCard").style.display = "none";
+    }
+    document.getElementById("anaMeta").textContent = "答案附带执行过的 SQL，可据此核对数字";
+  } catch (e) {
+    showToast("分析失败：" + e.message, true);
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.textContent = "分析";
+  }
+}
+
+document.getElementById("anaSend").onclick = runAnalyze;
+document.getElementById("anaInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runAnalyze();
+});
+document.getElementById("anaCatalog").onclick = () => {
+  const box = document.getElementById("anaCatalogBox");
+  box.style.display = box.style.display === "none" ? "" : "none";
+};
+document.getElementById("anaCopySql").onclick = async () => {
+  const sql = document.getElementById("anaSql").textContent || "";
+  try {
+    await navigator.clipboard.writeText(sql);
+    showToast("SQL 已复制");
+  } catch {
+    showToast("复制失败，请手动选中", true);
+  }
+};
+document.getElementById("menuBtn4").onclick = () => {
+  document.getElementById("backdrop").classList.add("show");
+  document.querySelector("aside").classList.add("show");
+};
 
 // ── 审批收件箱 ──────────────────────────────────────────────
 // 管理员看别人提的申请；普通用户看自己提的（等批准后重试）。

@@ -237,6 +237,7 @@ async def describe_node(state: AnalystState) -> dict[str, Any]:
             "sql": sql,
             "row_count": len(rows),
             "columns": columns,
+            "rows": rows[:50],
         },
     }
 
