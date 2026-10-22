@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
+from agents.crawler.exporter import export_task
 from agents.crawler.processor import aggregate, process_task
 from agents.crawler.store import get_crawl_store
 from api.deps import get_current_user, rate_limit
@@ -34,6 +35,7 @@ class CrawlRequest(BaseModel):
     entry_url: str = Field(..., min_length=8, description="入口 URL")
     goal: str = Field(default="", description="自然语言任务目标，决定跟进哪些链接")
     max_pages: int = Field(default=0, ge=0, le=20, description="最多抓几页，0 = 用默认值")
+    export: bool = Field(default=False, description="抓完直接导出为文件")
     session_id: str = Field(default="crawl", description="会话 ID（仅用于日志串联）")
 
 
@@ -45,6 +47,9 @@ class CrawlResponse(BaseModel):
     records: int = 0
     strategy: str = ""
     stop_reason: str = ""
+    # 抓完就能导出（前端据此给"导出为文件"按钮）
+    can_export: bool = False
+    export_dir: str = ""
     degraded: bool = False
     degrade_reason: str = ""
     error_msg: str | None = None
@@ -95,14 +100,23 @@ async def run(
     result: AgentResponse = await get_orchestrator().handle(agent_request)
     structured = result.structured or {}
 
+    # 抓完顺手导出（用户事先选了"导出"才做，默认不产生文件）
+    export_dir = ""
+    task_id = int(structured.get("task_id") or 0)
+    if request.export and task_id:
+        exported = await export_task(task_id, user["tenant_id"])
+        export_dir = exported.directory if exported.ok else ""
+
     return CrawlResponse(
         success=result.success,
-        task_id=int(structured.get("task_id") or 0),
+        task_id=task_id,
         summary=result.content,
         pages=int(structured.get("pages") or 0),
         records=int(structured.get("records") or 0),
         strategy=str(structured.get("strategy") or ""),
         stop_reason=str(structured.get("stop_reason") or ""),
+        can_export=bool(structured.get("task_id")),
+        export_dir=export_dir or str(structured.get("export_dir") or ""),
         degraded=result.fallback_used,
         degrade_reason=result.degrade_reason,
         error_msg=result.error_msg,
@@ -211,4 +225,42 @@ async def process(
         summary=result.summary,
         issues=result.issues,
         top_values=top_values,
+    )
+
+
+class ExportRequest(BaseModel):
+    """导出请求。"""
+
+    out_dir: str | None = Field(default=None, description="导出根目录，默认 data/crawl")
+
+
+class ExportResponse(BaseModel):
+    success: bool
+    task_id: int = 0
+    directory: str = ""
+    pages: int = 0
+    records: int = 0
+    bytes_written: int = 0
+    files: list[str] = Field(default_factory=list)
+    error_msg: str | None = None
+
+
+@router.post("/export/{task_id}", response_model=ExportResponse, summary="导出为文件")
+async def export(
+    task_id: int,
+    request: ExportRequest | None = None,
+    user: dict[str, str] = Depends(get_current_user),
+) -> ExportResponse:
+    """把任务下的原始 HTML、正文、结构化记录写成文件。"""
+    out_dir = request.out_dir if request else None
+    result = await export_task(task_id, user["tenant_id"], out_dir=out_dir)
+    return ExportResponse(
+        success=result.ok,
+        task_id=result.task_id,
+        directory=result.directory,
+        pages=result.pages,
+        records=result.records,
+        bytes_written=result.bytes_written,
+        files=result.files,
+        error_msg=None if result.ok else result.error,
     )

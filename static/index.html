@@ -613,6 +613,37 @@ async function askOnce(message, bubble) {
   else if (data.route && data.route.agent) note = "自动路由 → " + data.route.agent;
   renderMeta(bubble, answerMode, data.sources || [], note);
   if (data.need_confirm && data.confirm) renderConfirm(bubble, data.confirm);
+  if (data.task_id) renderExport(bubble, data.task_id);
+}
+
+// 采集完成后给"导出为文件"按钮：数据本来在库里，想要文件时再落盘
+function renderExport(bubble, taskId) {
+  const box = document.createElement("div");
+  box.className = "tools";
+  const btn = document.createElement("button");
+  btn.textContent = "📁 导出为文件";
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = "正在导出…";
+    try {
+      const res = await apiFetch(`/api/v1/crawler/export/${taskId}`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        addRow("assistant", `已导出到：\n\`${data.directory}\`\n\n` +
+          `页面 ${data.pages} 个 / 结构化记录 ${data.records} 条 / ` +
+          `${(data.bytes_written / 1024).toFixed(1)} KB`);
+      } else {
+        addRow("assistant", "导出失败：" + (data.error_msg || "未知原因"));
+      }
+    } catch (e) {
+      addRow("assistant", "导出失败：" + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "📁 导出为文件";
+    }
+  };
+  box.appendChild(btn);
+  bubble.appendChild(box);
 }
 
 // 采集类意图的确认：有入口 URL 才给"确认抓取"，否则只是提示用户补 URL
@@ -640,6 +671,7 @@ function renderConfirm(bubble, info) {
         const data = await res.json();
         target.innerHTML = renderMarkdown(data.answer || data.error_msg || "（无输出）");
         renderMeta(target, data.answer_mode || "", [], "已执行采集");
+        if (data.task_id) renderExport(target, data.task_id);
       } catch (e) {
         target.textContent = "抓取失败：" + e.message;
       }

@@ -292,6 +292,39 @@ class CrawlStore:
             for r in rows
         ]
 
+    async def all_pages(self, task_id: int, tenant_id: str) -> list[dict[str, Any]]:
+        """导出用：某任务全部页面（含正文与原始 HTML），按租户校验归属。"""
+        await self.ensure_tables()
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.url, p.title, p.status, p.mode,
+                       p.char_count, p.content, p.html
+                FROM crawl_pages p
+                JOIN crawl_tasks t ON t.id = p.task_id
+                WHERE p.task_id = $1 AND t.tenant_id = $2
+                ORDER BY p.id
+                """,
+                task_id,
+                tenant_id,
+            )
+        finally:
+            await conn.close()
+        return [
+            {
+                "id": int(r["id"]),
+                "url": str(r["url"]),
+                "title": str(r["title"]),
+                "status": int(r["status"]),
+                "mode": str(r["mode"]),
+                "char_count": int(r["char_count"]),
+                "content": str(r["content"]),
+                "html": str(r["html"]),
+            }
+            for r in rows
+        ]
+
     async def get_page(self, page_id: int, tenant_id: str) -> dict[str, Any] | None:
         """取单页完整内容（含原始 HTML），用于排查抽取问题。"""
         await self.ensure_tables()

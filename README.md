@@ -118,8 +118,23 @@ pyright
 | `crawl_pages` | 正文（`content`）+ **原始 HTML（`html`，上限 30 万字符）** |
 | `crawl_records` | 结构化记录（JSON 文本） |
 
-原始 HTML 一定要存：抽取规则出错时（比如字段名取错、丢字段），
-没有原文就只能重新访问站点，而站点内容可能已经变了。'
+'原始 HTML 一定要存：抽取规则出错时（比如字段名取错、丢字段），
+没有原文就只能重新访问站点，而站点内容可能已经变了。
+
+需要文件时再导出（数据默认只在库里）：
+
+```powershell
+python -m scripts.export_crawl --list        # 看最近任务
+python -m scripts.export_crawl --task 5      # 导出到 data/crawl/5/
+```
+
+```
+data/crawl/5/
+    manifest.json            任务元信息 + 文件清单
+    records.jsonl            结构化记录，一行一条
+    pages/0013-标题.html      原始 HTML
+    pages/0013-标题.txt       清洗后的正文（头部带来源 URL）
+```''
 
 **为什么 qa 不用 MCP**：它的检索是同进程内的函数调用，上 MCP 只会多一次网络往返和一个故障点。
 **为什么 research 用 MCP**：web 搜索是外部服务，且要被别的客户端复用，协议化才有价值。

@@ -66,6 +66,8 @@ class AskResponse(BaseModel):
     # 联网时实际使用的时间窗口（空 = 不限）
     time_range: str = ""
     # 需要用户确认才能继续时：answer_mode=confirm，confirm 里是待执行的动作
+    # 采集类请求会返回 task_id，前端据此给"导出为文件"按钮
+    task_id: int = 0
     need_confirm: bool = False
     confirm: dict[str, Any] = Field(default_factory=dict)
     fallback_used: bool = False
@@ -131,6 +133,7 @@ async def ask(
         route=result.metadata.get("route") or {},
         web_status=str(result.metadata.get("web_status") or ""),
         time_range=str(result.metadata.get("time_range") or ""),
+        task_id=int(structured.get("task_id") or 0),
         need_confirm=need_confirm,
         confirm=confirm if isinstance(confirm, dict) else {},
         fallback_used=result.fallback_used,
