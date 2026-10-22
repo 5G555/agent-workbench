@@ -19,6 +19,8 @@ dist/
 var/
 data/
 logs/
+# 评估集是测试资产，要进版本库（其余 data/ 仍是本地语料）
+!data/eval_set.jsonl
 *.log
 *.db
 *.sqlite3
