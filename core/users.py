@@ -111,6 +111,24 @@ class UserStore:
         finally:
             await conn.close()
 
+    async def count_admins(self, tenant_id: str) -> int:
+        """某个租户里有多少管理员。
+
+        用途：判断"能不能自己批自己"。
+            只有 1 个管理员时，强制双人复核等于让删除永远无法执行；
+            有 2 个以上时才要求换一个人批。
+        """
+        await self.ensure_table()
+        conn = await self._connect()
+        try:
+            value = await conn.fetchval(
+                "SELECT count(*) FROM users WHERE tenant_id = $1 AND role = 'admin'",
+                tenant_id,
+            )
+            return int(value or 0)
+        finally:
+            await conn.close()
+
 
 _user_store: UserStore | None = None
 

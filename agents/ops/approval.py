@@ -115,8 +115,17 @@ async def create_ticket(
     return ticket
 
 
-async def confirm_ticket(approval_id: str, operator: str) -> tuple[bool, str, dict | None]:
-    """人工确认。返回 (成功, 说明, 票据)。"""
+async def confirm_ticket(
+    approval_id: str, operator: str, allow_self: bool = False
+) -> tuple[bool, str, dict | None]:
+    """人工确认。返回 (成功, 说明, 票据)。
+
+    allow_self：是否允许发起人自己批准。
+        调用方按"本租户管理员数量"决定：
+            只有 1 个管理员 → 允许（否则这个租户永远删不了东西，会把功能锁死）
+            2 个及以上    → 不允许，要求换一个人批（真正的双人复核）
+        自批会在票据里记 self_approved=True 并打 warning，便于事后审计。
+    """
     client = await get_redis()
     if client is None:
         return False, "审批存储不可用，拒绝执行", None
@@ -130,12 +139,17 @@ async def confirm_ticket(approval_id: str, operator: str) -> tuple[bool, str, di
         return False, f"票据状态是 {data.get('status')}，不能再次确认", data
 
     settings = get_settings()
-    if not settings.ops_allow_self_approval and operator == data.get("requester"):
-        return False, "不能自己批准自己的删除请求", data
+    self_approval = operator == data.get("requester")
+    if self_approval and not (allow_self or settings.ops_allow_self_approval):
+        return False, "不能自己批准自己的删除请求（本租户还有其他管理员）", data
 
     data["status"] = "confirmed"
     data["operator"] = operator
     data["confirmed_at"] = datetime.now(UTC).isoformat()
+    if self_approval:
+        # 自批必须留痕：审计时能一眼看出"这次没有第二个人看过"
+        data["self_approved"] = True
+        logger.warning("approval.self_approved", approval=approval_id, operator=operator)
     ttl = int(settings.ops_approval_ttl_seconds or DEFAULT_TTL_SECONDS)
     await client.set(_key(approval_id), json.dumps(data, ensure_ascii=False), ex=ttl)
     logger.info("approval.confirmed", approval=approval_id, operator=operator)

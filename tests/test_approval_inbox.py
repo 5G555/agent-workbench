@@ -115,3 +115,21 @@ async def test_ticket_payload_is_json_serializable(fake_redis):
     await _make()
     tickets = await approval.list_tickets()
     json.dumps(tickets, ensure_ascii=False)
+
+
+async def test_self_approval_blocked_by_default(fake_redis):
+    """默认不允许自批（有第二个管理员时必须换人批）。"""
+    approval_id = await _make(requester="6")
+    ok, message, _ = await approval.confirm_ticket(approval_id, "6")
+    assert ok is False
+    assert "自己" in message
+
+
+async def test_self_approval_allowed_when_single_admin(fake_redis):
+    """只有 1 个管理员时放行，但必须留痕 self_approved。"""
+    approval_id = await _make(requester="6")
+    ok, _message, ticket = await approval.confirm_ticket(approval_id, "6", allow_self=True)
+    assert ok is True
+    assert ticket is not None
+    assert ticket["self_approved"] is True
+    assert ticket["operator"] == "6"

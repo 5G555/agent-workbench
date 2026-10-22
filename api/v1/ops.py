@@ -27,6 +27,7 @@ from agents.ops.cleaner import human_size, plan_cleanup, scan_exports
 from agents.ops.gateway import execute as gateway_execute
 from api.deps import get_current_user, rate_limit
 from core.logger import get_logger
+from core.users import get_user_store
 
 logger = get_logger(__name__)
 
@@ -317,8 +318,23 @@ async def approval_confirm(
     # 审批是权限动作：只有管理员能批
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="只有管理员可以审批删除操作")
-    ok, message, ticket = await approval.confirm_ticket(approval_id, user["user_id"])
-    return {"ok": ok, "message": message, "ticket": ticket}
+
+    # 双人复核怎么落地，取决于本租户有几个管理员：
+    #   只有 1 个 → 允许自批（否则没人能批，删除功能等于被锁死），票据记 self_approved
+    #   2 个及以上 → 必须换一个人批
+    admin_count = await get_user_store().count_admins(user["tenant_id"])
+    ok, message, ticket = await approval.confirm_ticket(
+        approval_id,
+        user["user_id"],
+        allow_self=admin_count <= 1,
+    )
+    return {
+        "ok": ok,
+        "message": message,
+        "ticket": ticket,
+        "admin_count": admin_count,
+        "self_approved": bool(ticket and ticket.get("self_approved")),
+    }
 
 
 @router.get("/approvals", summary="待审批列表（管理员）")
