@@ -55,10 +55,13 @@ CREATE TABLE IF NOT EXISTS crawl_pages (
     mode        VARCHAR(16)   NOT NULL DEFAULT 'http',
     char_count  INTEGER       NOT NULL DEFAULT 0,
     content     TEXT          NOT NULL DEFAULT '',
+    html        TEXT          NOT NULL DEFAULT '',
     error       TEXT          NOT NULL DEFAULT '',
     fetched_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
     UNIQUE (task_id, url)
 );
+-- 迁移：老表没有 html 列时补上（存原始 HTML，用于复现抽取问题）
+ALTER TABLE crawl_pages ADD COLUMN IF NOT EXISTS html TEXT NOT NULL DEFAULT '';
 
 -- 结构化记录
 CREATE TABLE IF NOT EXISTS crawl_records (
@@ -229,6 +232,7 @@ class CrawlStore:
         status: int = 0,
         mode: str = "http",
         content: str = "",
+        html: str = "",
         error: str = "",
     ) -> None:
         conn = await self._connect()
@@ -236,13 +240,14 @@ class CrawlStore:
             await conn.execute(
                 """
                 INSERT INTO crawl_pages
-                    (task_id, url, final_url, title, status, mode, char_count, content, error)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    (task_id, url, final_url, title, status, mode,
+                     char_count, content, html, error)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (task_id, url) DO UPDATE
                 SET final_url = EXCLUDED.final_url, title = EXCLUDED.title,
                     status = EXCLUDED.status, mode = EXCLUDED.mode,
                     char_count = EXCLUDED.char_count, content = EXCLUDED.content,
-                    error = EXCLUDED.error, fetched_at = now()
+                    html = EXCLUDED.html, error = EXCLUDED.error, fetched_at = now()
                 """,
                 task_id,
                 url[:1000],
@@ -252,10 +257,72 @@ class CrawlStore:
                 mode[:10],
                 len(content),
                 content,
+                truncate_html(html),
                 error[:2000],
             )
         finally:
             await conn.close()
+
+    async def list_pages(self, task_id: int) -> list[dict[str, Any]]:
+        """某任务抓过的页面列表（不带正文，避免返回体过大）。"""
+        await self.ensure_tables()
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT id, url, title, status, mode, char_count,
+                       length(html) AS html_len, fetched_at
+                FROM crawl_pages WHERE task_id = $1 ORDER BY id
+                """,
+                task_id,
+            )
+        finally:
+            await conn.close()
+        return [
+            {
+                "id": int(r["id"]),
+                "url": str(r["url"]),
+                "title": str(r["title"]),
+                "status": int(r["status"]),
+                "mode": str(r["mode"]),
+                "char_count": int(r["char_count"]),
+                "html_len": int(r["html_len"] or 0),
+                "fetched_at": r["fetched_at"].isoformat(),
+            }
+            for r in rows
+        ]
+
+    async def get_page(self, page_id: int, tenant_id: str) -> dict[str, Any] | None:
+        """取单页完整内容（含原始 HTML），用于排查抽取问题。"""
+        await self.ensure_tables()
+        conn = await self._connect()
+        try:
+            row = await conn.fetchrow(
+                """
+                SELECT p.id, p.task_id, p.url, p.title, p.status, p.mode,
+                       p.char_count, p.content, p.html
+                FROM crawl_pages p
+                JOIN crawl_tasks t ON t.id = p.task_id
+                WHERE p.id = $1 AND t.tenant_id = $2
+                """,
+                page_id,
+                tenant_id,
+            )
+        finally:
+            await conn.close()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "task_id": int(row["task_id"]),
+            "url": str(row["url"]),
+            "title": str(row["title"]),
+            "status": int(row["status"]),
+            "mode": str(row["mode"]),
+            "char_count": int(row["char_count"]),
+            "content": str(row["content"]),
+            "html": str(row["html"]),
+        }
 
     async def page_urls(self, task_id: int) -> set[str]:
         """本任务已经抓过的 URL，用于去重。"""
@@ -328,3 +395,22 @@ def get_crawl_store() -> CrawlStore:
     if _store is None:
         _store = CrawlStore()
     return _store
+
+
+def truncate_html(html: str, limit: int | None = None) -> str:
+    """原始 HTML 落库前截断。
+
+    为什么必须截断：
+        有的页面单文件就几 MB（内联的 base64 图片、超长脚本），
+        直接入库会让 crawl_pages 迅速膨胀，查询也变慢。
+        截断到上限足够复现抽取问题——抽取依赖的是结构，不是尾部内容。
+    """
+    if not html:
+        return ""
+    cap = limit if limit is not None else get_settings().crawl_max_html_chars
+    if cap <= 0:
+        return ""
+    if len(html) <= cap:
+        return html
+    logger.info("crawler.html_truncated", original=len(html), kept=cap)
+    return html[:cap] + "\n<!-- truncated -->"

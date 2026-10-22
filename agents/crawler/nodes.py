@@ -107,6 +107,7 @@ async def fetch_node(state: CrawlState) -> dict[str, Any]:
         status=result.status,
         mode=result.mode,
         content=result.text,
+        html=result.html,
         error=result.error,
     )
 

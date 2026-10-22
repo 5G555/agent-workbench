@@ -139,6 +139,28 @@ async def task_detail(
     }
 
 
+@router.get("/pages/{task_id}", summary="任务抓取过的页面")
+async def pages(
+    task_id: int,
+    user: dict[str, str] = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    task = await get_crawl_store().get_task(task_id, user["tenant_id"])
+    if task is None:
+        return []
+    return await get_crawl_store().list_pages(task_id)
+
+
+@router.get("/page/{page_id}", summary="单页内容（含原始 HTML）")
+async def page_detail(
+    page_id: int,
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    page = await get_crawl_store().get_page(page_id, user["tenant_id"])
+    if page is None:
+        return {"found": False, "page_id": page_id}
+    return {"found": True, **page}
+
+
 @router.get("/records/{task_id}", summary="任务的结构化记录")
 async def records(
     task_id: int,

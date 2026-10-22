@@ -108,7 +108,18 @@ pyright
 |---|---|---|
 | `qa` | 内部知识库（Milvus + FAQ + Redis 缓存） | `POST /api/v1/qa/ask` |
 | `research` | 公网（经 MCP 调 web_search 工具） | `POST /api/v1/research/ask` |
-| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
+'| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
+
+爬取数据全部存在 PostgreSQL（不落盘）：
+
+| 表 | 内容 |
+|---|---|
+| `crawl_tasks` | 任务目标、状态、页数/记录数、停止原因 |
+| `crawl_pages` | 正文（`content`）+ **原始 HTML（`html`，上限 30 万字符）** |
+| `crawl_records` | 结构化记录（JSON 文本） |
+
+原始 HTML 一定要存：抽取规则出错时（比如字段名取错、丢字段），
+没有原文就只能重新访问站点，而站点内容可能已经变了。'
 
 **为什么 qa 不用 MCP**：它的检索是同进程内的函数调用，上 MCP 只会多一次网络往返和一个故障点。
 **为什么 research 用 MCP**：web 搜索是外部服务，且要被别的客户端复用，协议化才有价值。

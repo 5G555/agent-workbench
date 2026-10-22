@@ -140,6 +140,8 @@ class Settings(BaseSettings):
     web_daily_quota_per_tenant: int = 500
     # 爬虫 Agent 单次最多抓几个页面（每页 1~3 秒，别开太大）
     crawler_max_pages: int = 5
+    # 原始 HTML 入库上限（字符）。0 = 不存 HTML；默认 30 万字符约 300KB/页
+    crawl_max_html_chars: int = 300_000
 
     # ── 应用基础配置 ──
     app_env: str = "local"
