@@ -59,8 +59,15 @@ if STATIC_DIR.exists():
 
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    """前端页面。"""
-    return FileResponse(STATIC_DIR / "index.html")
+    """前端页面。
+
+    强禁用缓存：单文件前端一旦被浏览器缓存，改了代码用户还在看旧界面
+    （排查时非常迷惑——后端行为对了，页面还是老的）。
+    """
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.get("/health", summary="健康检查", tags=["ops"])

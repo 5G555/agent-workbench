@@ -1267,7 +1267,8 @@ function renderMine() {
   });
 }
 
-async function continueAfterApproval(id) {
+async function continueAfterApproval(id, opts) {
+  const silent = !!(opts && opts.silent);
   const entry = pendingMine.find((p) => p.id === id);
   if (!entry) return;
   const ticket = await apiFetch(`/api/v1/ops/approvals/${encodeURIComponent(id)}`).then((r) => r.json());
@@ -1439,14 +1440,29 @@ function rememberMine(id, url, body, approval) {
 async function approveAndRetry(needs, url, body) {
   const approval = needs.approval || {};
   const id = approval.approval_id;
+
+  // 非管理员：本地点不了"批准"，直接提交给管理员，别弹一个自己做不到的确认框
+  if (currentUser.role !== "admin") {
+    rememberMine(id, url, body, approval);
+    showToast(
+      `已提交审批：${id}\n` +
+      `影响：${approval.impact || "-"}\n` +
+      `管理员处理后会在这里自动通知，也可以去「我的待审批」看进度`
+    );
+    startApprovalPolling();
+    return null;
+  }
+
   const info =
     `该操作需要审批\n\n` +
     `票据：${id}\n` +
     `影响：${approval.impact || "-"}\n` +
     `可逆性：${approval.reversible || "-"}\n\n` +
-    `作为管理员批准并执行？`;
+    `你是管理员，现在就批准并执行？`;
   if (!confirm(info)) {
-    showToast(`已取消。票据 ${id} 仍待审批（15 分钟内有效）`);
+    rememberMine(id, url, body, approval);
+    showToast(`已加入待审批：${id}（15 分钟内有效）`);
+    startApprovalPolling();
     return null;
   }
 
@@ -1463,6 +1479,44 @@ async function approveAndRetry(needs, url, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...body, approval_token: id }),
   }).then((r) => r.json());
+}
+
+// 轮询自己提交的申请：管理员批准后自动执行，被拒就通知并移除
+let approvalTimer = null;
+
+function startApprovalPolling() {
+  if (approvalTimer || !pendingMine.length) return;
+  approvalTimer = setInterval(async () => {
+    if (!pendingMine.length) {
+      clearInterval(approvalTimer);
+      approvalTimer = null;
+      return;
+    }
+    for (const entry of [...pendingMine]) {
+      let ticket;
+      try {
+        ticket = await apiFetch(
+          `/api/v1/ops/approvals/${encodeURIComponent(entry.id)}`
+        ).then((r) => r.json());
+      } catch (e) {
+        continue;
+      }
+      if (!ticket || ticket.status === "pending") continue;
+      if (ticket.status === "rejected") {
+        dropMine(entry.id);
+        showToast(`申请被拒绝：${entry.label}\n操作不会执行`, true);
+      } else if (ticket.status === "confirmed") {
+        await continueAfterApproval(entry.id, { silent: true });
+      } else {
+        dropMine(entry.id);
+      }
+    }
+  }, 5000);
+}
+
+function dropMine(id) {
+  pendingMine = pendingMine.filter((p) => p.id !== id);
+  renderMine();
 }
 
 async function cleanExports(apply) {
