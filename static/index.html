@@ -222,6 +222,20 @@
 .opscard .inputbar { display: flex; gap: 8px; }
 .opscard .inputbar input { flex: 1; }
 #cStale.warn { color: #f59e0b; }
+.opscard button.danger {
+  background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.55); color: #fca5a5;
+}
+.opscard button.danger:hover { background: rgba(239,68,68,.28); }
+.opstable button {
+  padding: 3px 8px; font-size: 12px; border-radius: 6px; margin-right: 4px;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+  color: inherit; cursor: pointer;
+}
+.opstable button:hover { background: rgba(255,255,255,.16); }
+.opscard select {
+  padding: 7px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.25); color: inherit; font-size: 12.5px;
+}
 
   .card { width: 330px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
   .card h2 { margin: 0; font-size: 17px; }
@@ -331,20 +345,43 @@
       </div>
       <div class="tools">
         <button class="primary" id="cacheClean">清理旧版本</button>
-        <span class="hint" style="opacity:.6;align-self:center">只删旧版本键，当前版本缓存不受影响</span>
+        <select id="cacheBackup" style="min-width:170px"><option value="">（无备份）</option></select>
+        <button id="cacheRestore">从备份恢复</button>
+        <span class="hint" style="opacity:.6;align-self:center">
+          只删旧版本键；删除前先备份，可恢复
+        </span>
       </div>
     </section>
 
     <section class="opscard">
       <h3>导出目录 <span id="exportSummary" class="hint" style="opacity:.6"></span></h3>
       <table class="opstable">
-        <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>几天前</th><th>路径</th></tr></thead>
-        <tbody id="exportRows"><tr><td colspan="5" style="opacity:.6">加载中…</td></tr></tbody>
+        <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>几天前</th><th>路径</th><th>操作</th></tr></thead>
+        <tbody id="exportRows"><tr><td colspan="6" style="opacity:.6">加载中…</td></tr></tbody>
       </table>
       <div class="tools">
         <label style="align-self:center">保留最近 <input id="keepN" type="number" min="0" max="100" value="3" style="width:60px" /> 个</label>
         <button id="exportPreview">预演</button>
         <button class="primary" id="exportApply">执行清理</button>
+        <span class="hint" style="opacity:.6;align-self:center">
+          清理 = 移入回收站（不是真删），可在下方恢复
+        </span>
+      </div>
+    </section>
+
+    <section class="opscard">
+      <h3>回收站 <span id="trashSummary" class="hint" style="opacity:.6"></span></h3>
+      <table class="opstable">
+        <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>删除于</th><th>操作</th></tr></thead>
+        <tbody id="trashRows"><tr><td colspan="5" style="opacity:.6">加载中…</td></tr></tbody>
+      </table>
+      <div class="tools">
+        <label style="align-self:center">永久删除超过 <input id="purgeDays" type="number" min="0" max="365" value="7" style="width:64px" /> 天的</label>
+        <button id="purgePreview">预演</button>
+        <button class="danger" id="purgeApply">永久删除</button>
+        <span class="hint" style="opacity:.6;align-self:center">
+          不可恢复，需管理员审批
+        </span>
       </div>
     </section>
 
@@ -1057,10 +1094,12 @@ document.getElementById("menuBtn2").onclick = () => {
 // ══════════════════════════════════════════════════════
 async function loadOps() {
   try {
-    const [cacheRes, exportRes] = await Promise.all([
+    const [cacheRes, exportRes, trashRes] = await Promise.all([
       apiFetch("/api/v1/ops/cache").then((r) => r.json()),
       apiFetch("/api/v1/ops/exports").then((r) => r.json()),
+      apiFetch("/api/v1/ops/trash").then((r) => r.json()),
     ]);
+
     document.getElementById("cVer").textContent = cacheRes.version || "-";
     document.getElementById("cTotal").textContent = cacheRes.total_keys ?? "-";
     document.getElementById("cCur").textContent = cacheRes.current_keys ?? "-";
@@ -1068,19 +1107,139 @@ async function loadOps() {
     staleEl.textContent = cacheRes.stale_keys ?? "-";
     staleEl.classList.toggle("warn", (cacheRes.stale_keys || 0) > 0);
 
+    // 备份下拉：有备份才能点"从备份恢复"
+    const select = document.getElementById("cacheBackup");
+    const backups = cacheRes.backups || [];
+    select.innerHTML = backups.length
+      ? backups.map((b) => `<option value="${esc(b)}">${esc(b)}</option>`).join("")
+      : '<option value="">（无备份）</option>';
+
+    // 导出目录：每行带"导出 / 移入回收站"
     document.getElementById("exportSummary").textContent =
       `（${exportRes.count} 个，共 ${exportRes.total_human}）`;
     const rows = exportRes.items || [];
     document.getElementById("exportRows").innerHTML = rows.length
       ? rows.map((it) => `<tr>
           <td>#${it.task_id}</td><td>${it.files}</td><td>${it.size}</td>
-          <td>${it.age_days} 天</td><td>${esc(it.path)}</td></tr>`).join("")
-      : '<tr><td colspan="5" style="opacity:.6">还没有导出目录</td></tr>';
+          <td>${it.age_days} 天</td><td>${esc(it.path)}</td>
+          <td>
+            <button data-export="${it.task_id}">导出</button>
+            <button data-trash="${it.task_id}">移入回收站</button>
+          </td></tr>`).join("")
+      : '<tr><td colspan="6" style="opacity:.6">还没有导出目录</td></tr>';
+    document.querySelectorAll("#exportRows [data-export]").forEach((btn) => {
+      btn.onclick = () => exportTaskFromOps(Number(btn.dataset.export));
+    });
+    document.querySelectorAll("#exportRows [data-trash]").forEach((btn) => {
+      btn.onclick = () => trashOneExport(Number(btn.dataset.trash));
+    });
+
+    // 回收站：每行带"恢复"
+    document.getElementById("trashSummary").textContent =
+      trashRes.count ? `（${trashRes.count} 项，共 ${trashRes.total_human}）` : "（空）";
+    const trashItems = trashRes.items || [];
+    document.getElementById("trashRows").innerHTML = trashItems.length
+      ? trashItems.map((it) => `<tr>
+          <td>#${it.task_id}</td><td>${it.files}</td>
+          <td>${(it.size / 1024).toFixed(1)} KB</td><td>${it.age_days} 天前</td>
+          <td><button data-restore="${esc(it.trash_id)}">恢复</button></td></tr>`).join("")
+      : '<tr><td colspan="5" style="opacity:.6">回收站是空的</td></tr>';
+    document.querySelectorAll("#trashRows [data-restore]").forEach((btn) => {
+      btn.onclick = () => restoreTrash(btn.dataset.restore);
+    });
+
     document.getElementById("opsMeta").textContent =
-      `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} 个目录`;
+      `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} · 回收站 ${trashRes.count}`;
   } catch (e) {
     showToast("加载运维数据失败：" + e.message, true);
+    // 别让界面停在"加载中…"而不给线索
+    document.getElementById("exportRows").innerHTML =
+      `<tr><td colspan="6" style="color:#ff6b6b">加载失败：${esc(e.message)}</td></tr>`;
   }
+}
+
+// ── 手动操作 ────────────────────────────────────────────────
+async function exportTaskFromOps(taskId) {
+  const res = await apiFetch(`/api/v1/crawler/export/${taskId}`, { method: "POST" }).then((r) =>
+    r.json()
+  );
+  if (res.success) {
+    showToast(`任务 #${taskId} 已导出到\n${res.directory}\n（${res.pages} 页 / ${res.records} 条）`);
+    loadOps();
+  } else {
+    showToast("导出失败：" + (res.error_msg || "未知原因"), true);
+  }
+}
+
+async function trashOneExport(taskId) {
+  if (!confirm(`把任务 #${taskId} 的导出目录移入回收站？\n（不是真删，可在回收站恢复）`)) return;
+  let res = await apiFetch("/api/v1/ops/exports/clean", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_id: taskId, apply: true }),
+  }).then((r) => r.json());
+  if (res.status === "needs_approval") {
+    res = await approveAndRetry(res, "/api/v1/ops/exports/clean", { task_id: taskId, apply: true });
+    if (!res) return;
+  }
+  if (res.status === "blocked") {
+    showToast("已阻断：" + res.message, true);
+    return;
+  }
+  showToast(`任务 #${taskId} 已移入回收站`);
+  loadOps();
+}
+
+async function restoreTrash(trashId) {
+  const res = await apiFetch(`/api/v1/ops/trash/${encodeURIComponent(trashId)}/restore`, {
+    method: "POST",
+  }).then((r) => r.json());
+  showToast(res.ok ? `已恢复：${res.detail}` : `恢复失败：${res.detail}`, !res.ok);
+  loadOps();
+}
+
+async function restoreCacheBackup() {
+  const backupId = document.getElementById("cacheBackup").value;
+  if (!backupId) {
+    showToast("没有可用的备份", true);
+    return;
+  }
+  const res = await apiFetch(
+    `/api/v1/ops/cache/backups/${encodeURIComponent(backupId)}/restore`,
+    { method: "POST" }
+  ).then((r) => r.json());
+  showToast(res.ok ? `已恢复 ${res.restored_keys} 个键` : "恢复失败（备份可能已过期）", !res.ok);
+  loadOps();
+}
+
+async function purgeTrash(apply) {
+  const days = Number(document.getElementById("purgeDays").value);
+  const payload = { older_than_days: days, apply };
+  let res = await apiFetch("/api/v1/ops/trash/purge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json());
+
+  if (!apply) {
+    const list = res.would_delete || [];
+    showToast(
+      list.length
+        ? `预演：将永久删除 ${list.length} 项（${res.freed}）\n${list.join(", ")}`
+        : "没有可永久删除的条目"
+    );
+    return;
+  }
+  if (res.status === "needs_approval") {
+    res = await approveAndRetry(res, "/api/v1/ops/trash/purge", payload);
+    if (!res) return;
+  }
+  if (res.status === "blocked") {
+    showToast("已阻断：" + res.message, true);
+    return;
+  }
+  showToast(`已永久删除 ${(res.data && res.data.purged) || 0} 项`);
+  loadOps();
 }
 
 async function cleanCache() {
@@ -1200,6 +1359,9 @@ async function askOps() {
 }
 
 document.getElementById("opsRefresh").onclick = loadOps;
+document.getElementById("cacheRestore").onclick = restoreCacheBackup;
+document.getElementById("purgePreview").onclick = () => purgeTrash(false);
+document.getElementById("purgeApply").onclick = () => purgeTrash(true);
 document.getElementById("cacheClean").onclick = cleanCache;
 document.getElementById("exportPreview").onclick = () => cleanExports(false);
 document.getElementById("exportApply").onclick = () => cleanExports(true);
