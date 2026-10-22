@@ -41,7 +41,7 @@ router = APIRouter()
 class AskRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
-    mode: Literal["auto", "qa", "research", "crawler"] = Field(
+    mode: Literal["auto", "qa", "research", "crawler", "analyst"] = Field(
         default="auto", description="路由模式；crawler 表示确认后直接抓取"
     )
     source: str | None = Field(default=None, description="限定检索来源（仅 qa 有效）")

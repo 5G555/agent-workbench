@@ -44,6 +44,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await get_pool()
     except Exception as exc:  # 数据库暂时不可用不该阻止启动，首个请求会再试
         logger.warning("db.pool_warmup_failed", error=str(exc))
+
+    # 建分析视图（幂等）：租户隔离下沉到视图里，分析 Agent 只能查这些
+    try:
+        from agents.analyst.schema import ensure_views
+
+        await ensure_views()
+    except Exception as exc:  # 视图建不出来也不该拦住整个应用
+        logger.warning("analyst.views_failed", error=str(exc))
+
     yield
     await close_pool()
     logger.info("app.shutdown")
@@ -52,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Myagent", version="0.1.0", lifespan=lifespan)
 # 注意顺序：中间件最后添加的最先执行，trace 要包在最外层
 app.add_middleware(TraceMiddleware)
+
 app.include_router(api_router, prefix="/api")
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -32,6 +32,7 @@ _AGENT_MODEL_ROUTING: dict[str, str] = {
     "qa": "deepseek-chat",  # 智能问答
     "research": "deepseek-chat",  # 联网研究（拆子问题 + 汇总）
     "crawler": "deepseek-chat",  # 网页采集（选链接 + 结果分析）
+    "analyst": "deepseek-chat",  # 数据分析（写 SQL + 解读）
 }
 
 

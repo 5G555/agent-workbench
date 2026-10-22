@@ -35,6 +35,7 @@ class AgentType(StrEnum):
     RESEARCH = "research"  # 联网研究（MCP 工具 + 多步检索）
     CRAWLER = "crawler"  # 网页采集（抓正文落库，供数据分析使用）
     OPS = "ops"  # 运维（通过 MCP 工具查任务 / 导出 / 清理）
+    ANALYST = "analyst"  # 数据分析（Text2SQL / MCP 探索 / 串联）
 
 
 class AgentRequest(BaseModel):
@@ -126,6 +127,11 @@ class Orchestrator:
                 from agents.ops.graph import build_ops_graph
 
                 self._agent_graphs[agent_type] = build_ops_graph()
+
+            elif agent_type == AgentType.ANALYST:
+                from agents.analyst.graph import build_analyst_graph
+
+                self._agent_graphs[agent_type] = build_analyst_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")

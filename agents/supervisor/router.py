@@ -92,7 +92,52 @@ OPS_KEYWORDS = (
     "有哪些任务",
 )
 
+# 数据分析意图：问的是"多少个/占比/趋势/排名/分布"这类量化问题
+ANALYST_KEYWORDS = (
+    "统计",
+    "占比",
+    "趋势",
+    "排名",
+    "分布",
+    "多少个",
+    "多少",
+    "多少次",
+    "多少条",
+    "命中率",
+    "满意度",
+    "平均",
+    "总数",
+    "增长率",
+    "top",
+    "排行",
+)
+
+# 问"多少钱"是问价格，不是分析
+PRICE_HINTS = ("钱", "价格", "费用", "收费", "报价", "贵")
+
+# "分析的对象是我们采集到的数据"这类说法
+CRAWL_DATA_HINTS = ("抓取到", "采集到", "抓到的", "爬取到", "采集的数据", "抓取的数据")
+
 URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\"']+")
+
+
+def is_analyst_intent(text: str) -> bool:
+    """是不是在问数据统计/分析。
+
+    和运维的区别：运维是删/清/导出，分析是多少/占比/趋势。
+    和采集的区别：采集要 URL，分析不要。
+    """
+    lowered = (text or "").lower()
+    if not lowered or not any(k in lowered for k in ANALYST_KEYWORDS):
+        return False
+    # "多少钱"是问价格，归 qa
+    if any(h in lowered for h in PRICE_HINTS):
+        return False
+    # 带 URL 的是去抓，不是分析（抓完再分析由 crawler/chain 处理）
+    if detect_url(text):
+        return False
+    # 提到抓取到的数据这类说法时仍归分析；只是抓取一下归 crawler
+    return not mentions_crawl(text) or any(h in lowered for h in CRAWL_DATA_HINTS)
 
 
 def is_ops_intent(text: str) -> bool:
@@ -130,7 +175,7 @@ def implies_crawl(text: str) -> bool:
 class RouteDecision(BaseModel):
     """路由结果。"""
 
-    agent: Literal["qa", "research", "crawler", "ops"] = Field(default="qa")
+    agent: Literal["qa", "research", "crawler", "ops", "analyst"] = Field(default="qa")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
@@ -198,6 +243,11 @@ async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
         logger.info("supervisor.routed", query=query, agent="ops", need_confirm=False)
         return resolved
 
+    if is_analyst_intent(query):
+        resolved = ResolvedRoute(agent="analyst", confidence=1.0, reason="分析关键词命中")
+        logger.info("supervisor.routed", query=query, agent="analyst", need_confirm=False)
+        return resolved
+
     decision = await _route_local(query)
     if decision is None:
         decision = await _route_llm(query, tenant_id)
@@ -239,7 +289,7 @@ async def _route_local(query: str) -> RouteDecision | None:
         return None
 
     return RouteDecision(
-        agent=cast(Literal["qa", "research", "crawler", "ops"], agent),
+        agent=cast(Literal["qa", "research", "crawler", "ops", "analyst"], agent),
         confidence=confidence,
         reason="本地意图模型",
     )
