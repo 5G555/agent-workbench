@@ -111,7 +111,7 @@ def apply_cleanup(targets: list[ExportDir]) -> tuple[int, int]:
     为什么改成软删除：
         删文件是终态的，而导出目录随时能从库里重建——
         没必要为了省几 MB 冒"删错且无法恢复"的风险。
-        真删（purge）是单独的、需要审批的操作（见 core/safety/trash.py）。
+        真删（purge）是单独的、需要审批的操作（见 agents/ops/trash.py）。
 
     返回 (移走的目录数, 释放的字节数)。
     """

@@ -2,7 +2,7 @@
 
 定位：给界面用的"确定按钮"，不是给模型用的。
     Agent 走 MCP 工具（mcp_servers/ops_server.py），界面走这里，
-    两边最终都经过 core/safety/gateway.py —— 同一套策略、同一套护栏。
+    两边最终都经过 agents/ops/gateway.py —— 同一套策略、同一套护栏。
 
 所以这里的行为和 Agent 完全一致：
     - 只读接口随便调

@@ -8,9 +8,9 @@
     web_search 是纯外网、无状态；这个服务要连库、改文件、动 Redis。
 
 破坏性工具（clean_exports / clean_cache / purge_trash）全部走
-core/safety/gateway.execute：
+agents/ops/gateway.execute：
     策略分级 → 人工审批（高风险）→ 幂等 → 预算熔断 → 快照 → 执行 → 验证/回滚
-模型只能"提出请求"，放不放行由确定性策略决定，见 core/safety/policy.py。
+模型只能"提出请求"，放不放行由确定性策略决定，见 agents/ops/policy.py。
 
 启动：python -m mcp_servers.ops_server        # 默认 127.0.0.1:8766
 """
