@@ -402,6 +402,17 @@
     </section>
 
     <section class="opscard">
+      <h3>审计日志 <span id="auditSummary" class="hint" style="opacity:.6"></span></h3>
+      <table class="opstable">
+        <thead><tr><th>时间</th><th>操作</th><th>风险</th><th>结果</th><th>审批人</th><th>自审</th></tr></thead>
+        <tbody id="auditRows"><tr><td colspan="6" style="opacity:.6">加载中…</td></tr></tbody>
+      </table>
+      <div class="hint" style="opacity:.6">
+        被阻断、待审批、已执行、已回滚都会留痕；自审（同一人发起并批准）单独标记
+      </div>
+    </section>
+
+    <section class="opscard">
       <h3>让 Agent 做</h3>
       <div class="inputbar">
         <input id="opsAsk" placeholder="例如：把旧版本的缓存清掉 / 列出最近的爬取任务" />
@@ -1185,6 +1196,7 @@ async function loadOps() {
     document.getElementById("opsMeta").textContent =
       `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} · 回收站 ${trashRes.count}`;
 
+    await loadAudit();
     await loadApprovals();
   } catch (e) {
     showToast("加载运维数据失败：" + e.message, true);
@@ -1197,6 +1209,42 @@ async function loadOps() {
 // ── 审批收件箱 ──────────────────────────────────────────────
 // 管理员看别人提的申请；普通用户看自己提的（等批准后重试）。
 let pendingMine = [];
+
+async function loadAudit() {
+  try {
+    const data = await apiFetch("/api/v1/ops/audit?limit=20").then((r) => r.json());
+    const stats = data.stats || {};
+    const by = stats.by_status || {};
+    const parts = Object.entries(by).map(([k, v]) => `${k} ${v}`);
+    document.getElementById("auditSummary").textContent =
+      `近 20 条` + (parts.length ? `（${parts.join(" / ")}）` : "") +
+      (stats.self_approved ? ` · 自审 ${stats.self_approved}` : "") +
+      (stats.unfinished ? ` · 未完成 ${stats.unfinished}` : "");
+
+    const items = data.items || [];
+    const badge = (status) => {
+      const color = {
+        executed: "#22c55e", blocked: "#ef4444", needs_approval: "#f59e0b",
+        replayed: "#38bdf8", rolled_back: "#f97316", failed: "#ef4444",
+        executing: "#a78bfa",
+      }[status] || "#94a3b8";
+      return `<span style="color:${color}">${esc(status)}</span>`;
+    };
+    document.getElementById("auditRows").innerHTML = items.length
+      ? items.map((it) => `<tr>
+          <td>${esc((it.created_at || "").slice(11, 19))}</td>
+          <td>${esc(it.tool)}</td>
+          <td>${esc(it.risk)}</td>
+          <td>${badge(it.status)}</td>
+          <td>${esc(it.approver || "-")}</td>
+          <td>${it.self_approved ? "是" : ""}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="6" style="opacity:.6">还没有审计记录</td></tr>';
+  } catch (e) {
+    document.getElementById("auditRows").innerHTML =
+      `<tr><td colspan="6" style="color:#ff6b6b">${esc(e.message)}</td></tr>`;
+  }
+}
 
 async function loadApprovals() {
   renderMine();

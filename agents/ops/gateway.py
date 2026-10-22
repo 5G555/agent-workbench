@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.ops import approval
+from agents.ops import audit as audit_mod
 from agents.ops.policy import Decision, Verdict, describe, evaluate
 from agents.qa.cache import get_redis
 from config import get_settings
@@ -174,10 +175,32 @@ async def execute(
     """走完整条安全链执行一次工具调用。"""
     verdict: Verdict = evaluate(tool, args)
     meta = describe(verdict)
+    auditor = audit_mod.get_audit_store()
+
+    async def _one_shot(status: str, result: dict[str, Any] | None = None) -> None:
+        """记录"没有实际执行"的事件；审计写失败不影响主流程。"""
+        try:
+            await auditor.record_one_shot(
+                audit_mod.AuditIntent(
+                    tenant_id=tenant_id,
+                    requester=user_id or "unknown",
+                    tool=tool,
+                    args=args,
+                    risk=meta["risk"],
+                    decision=meta["decision"],
+                    reasons=list(verdict.reasons),
+                    approval_id=(approval_token or ""),
+                ),
+                status,
+                result,
+            )
+        except Exception as exc:
+            logger.error("audit.write_failed", tool=tool, error=str(exc))
 
     # ① 阻断
     if verdict.decision is Decision.BLOCK:
         logger.warning("gateway.blocked", tool=tool, reasons=verdict.reasons, tenant=tenant_id)
+        await _one_shot("blocked")
         return ExecutionResult(
             status="blocked",
             ok=False,
@@ -201,6 +224,7 @@ async def execute(
     previous = await _check_idempotency(key)
     if previous is not None:
         logger.info("gateway.replayed", tool=tool, key=key)
+        await _one_shot("replayed")
         return ExecutionResult(
             status="replayed",
             ok=bool(previous.get("ok")),
@@ -223,6 +247,7 @@ async def execute(
                     verdict=meta,
                     message="审批存储不可用，拒绝执行（Fail-Closed）",
                 )
+            await _one_shot("needs_approval", {"approval_id": ticket.approval_id})
             return ExecutionResult(
                 status="needs_approval",
                 ok=False,
@@ -244,6 +269,7 @@ async def execute(
     amount = 1
     allowed, remaining, limit = await _consume_budget(tenant_id, amount)
     if not allowed:
+        await _one_shot("blocked", {"reason": "budget_exhausted"})
         return ExecutionResult(
             status="blocked",
             ok=False,
@@ -270,8 +296,45 @@ async def execute(
             message="快照写入失败，拒绝执行（Fail-Closed）",
         )
 
-    # ⑥ 执行（不重试）
+    # ⑥ 写审计 intent（Fail-Closed：审计写不进去就不执行）
+    approved_by = ""
+    self_approved_flag = False
+    if ticket_info is not None:
+        try:
+            ticket_data = await approval.get_ticket(ticket_info["approval_id"]) or {}
+            approved_by = str(ticket_data.get("operator") or "")
+            self_approved_flag = bool(ticket_data.get("self_approved"))
+        except Exception:
+            approved_by = ""
+
+    try:
+        audit_id = await auditor.record_intent(
+            audit_mod.AuditIntent(
+                tenant_id=tenant_id,
+                requester=user_id or "unknown",
+                tool=tool,
+                args=args,
+                risk=meta["risk"],
+                decision=meta["decision"],
+                reasons=list(verdict.reasons),
+                approval_id=ticket_info["approval_id"] if ticket_info else "",
+                approver=approved_by,
+                self_approved=self_approved_flag,
+                snapshot=snapshot_path,
+            )
+        )
+    except Exception as exc:
+        logger.error("audit.intent_failed", tool=tool, error=str(exc))
+        return ExecutionResult(
+            status="blocked",
+            ok=False,
+            verdict=meta,
+            message="审计写入失败，拒绝执行（Fail-Closed）",
+        )
+
+    # ⑦ 执行（不重试）
     if runner is None:
+        await auditor.record_outcome(audit_id, "blocked", {"reason": "no_runner"})
         return ExecutionResult(status="blocked", ok=False, verdict=meta, message="未提供执行函数")
     try:
         data = await runner(args)
@@ -280,6 +343,7 @@ async def execute(
         if rollback is not None:
             try:
                 await rollback(args, {"error": str(exc)})
+                await auditor.record_outcome(audit_id, "rolled_back", {"error": str(exc)})
                 return ExecutionResult(
                     status="rolled_back",
                     ok=False,
@@ -303,6 +367,7 @@ async def execute(
         if rollback is not None:
             try:
                 await rollback(args, data)
+                await auditor.record_outcome(audit_id, "rolled_back", data)
                 return ExecutionResult(
                     status="rolled_back",
                     ok=False,
@@ -320,6 +385,7 @@ async def execute(
             data=data,
         )
 
+    await auditor.record_outcome(audit_id, "executed", data)
     result = {
         **data,
         "snapshot": snapshot_path,

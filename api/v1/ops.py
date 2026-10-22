@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agents.ops import approval, trash
+from agents.ops.audit import get_audit_store
 from agents.ops.cache_maintenance import clean as clean_cache_keys
 from agents.ops.cache_maintenance import list_backups, restore_backup
 from agents.ops.cache_maintenance import overview as cache_overview
@@ -362,3 +363,17 @@ async def approval_reject(
         raise HTTPException(status_code=403, detail="只有管理员可以审批删除操作")
     ok, message, ticket = await approval.reject_ticket(approval_id, user["user_id"])
     return {"ok": ok, "message": message, "ticket": ticket}
+
+
+# ── 审计 ────────────────────────────────────────────────────
+@router.get("/audit", summary="运维审计日志")
+async def audit_log(
+    limit: int = Query(default=50, ge=1, le=200),
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """按租户返回最近的破坏性操作记录（含被阻断、待审批、已执行、已回滚）。"""
+    store = get_audit_store()
+    return {
+        "stats": await store.stats(user["tenant_id"]),
+        "items": await store.list_entries(user["tenant_id"], limit),
+    }

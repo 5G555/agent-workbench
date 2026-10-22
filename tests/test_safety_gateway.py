@@ -54,6 +54,36 @@ class FakeRedis:
         self.store.update(mapping)
 
 
+class FakeAudit:
+    """测试用审计：只记内存，不连数据库。"""
+
+    def __init__(self) -> None:
+        self.intents: list[tuple] = []
+        self.outcomes: list[tuple] = []
+
+    async def record_intent(self, intent):
+        self.intents.append((intent.tool, intent.tenant_id, intent.self_approved))
+        return len(self.intents)
+
+    async def record_outcome(self, audit_id, status, result=None):
+        self.outcomes.append((audit_id, status))
+
+    async def record_one_shot(self, intent, status, result=None):
+        self.intents.append((intent.tool, intent.tenant_id, intent.self_approved))
+        self.outcomes.append((len(self.intents), status))
+
+
+@pytest.fixture(autouse=True)
+def fake_audit(monkeypatch):
+    store = FakeAudit()
+
+    def _get():
+        return store
+
+    monkeypatch.setattr(gateway.audit_mod, "get_audit_store", _get)
+    return store
+
+
 @pytest.fixture()
 def fake_redis(monkeypatch):
     client = FakeRedis()
