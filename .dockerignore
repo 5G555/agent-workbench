@@ -1,0 +1,29 @@
+# 构建上下文排除项
+.git
+.gitignore
+.idea
+.vscode
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.pyright
+
+# 本地数据与运行产物（模型改成挂载，不烤进镜像）
+data
+var
+logs
+
+# 密钥
+.env
+
+# 文档与工具（不影响运行）
+docs
+tests
+scripts
+README.md
+requirements-dev.txt
+requirements.lock.txt
+docker-compose.yml
+Dockerfile
+.dockerignore

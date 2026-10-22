@@ -88,6 +88,51 @@ services:
       retries: 10
       start_period: 60s
 
+  # ── 应用本体（默认不启动，用 --profile app 才拉起来）──
+  # 启动：docker compose --profile app up -d --build
+  # Redis 用宿主机的（6379），通过 host.docker.internal 访问
+  app:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: ${TORCH_INDEX:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
+    image: myagent:${APP_TAG:-dev}
+    container_name: myagent_app
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # 容器内用服务名，不是 localhost
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      REDIS_URL: redis://host.docker.internal:6379/0
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      APP_ENV: ${APP_ENV:-local}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      # 模型走挂载，不进镜像
+      BGE_M3_MODEL_PATH: /models/embedding/bge-m3
+      RERANKER_MODEL_PATH: /models/reranker/bge-reranker-large
+      QUERY_CLASSIFIER_MODEL_PATH: /models/classifier/bert_query_classifier_ft
+      EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - D:/AI-Models:/models:ro
+      - ./var:/app/var
+
 volumes:
   postgres_data:
   etcd_data:
