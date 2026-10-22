@@ -1,6 +1,14 @@
 """MCP 客户端与返回解析。
 
-单独抽出来是为了断开循环依赖：
+支持多个 MCP 服务（按名字区分）：
+    web-search  研究 Agent 用（外网搜索/抓页）
+    crawler     运维 Agent 用（任务查询、导出、清理）
+
+为什么要分开而不是一个服务：
+    web-search 是纯外网、无状态；crawler 要连库、会改文件。
+    权限和故障面不同，拆开后一边挂了不影响另一边。
+
+单独抽出来还为了断开循环依赖：
     nodes（图节点）和 collector（证据采集）都要用 MCP，
     如果放在 nodes 里，collector 又被 nodes import 就成环了。
 """
@@ -15,26 +23,30 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-_client: Any = None
+_clients: dict[str, Any] = {}
 
 
-async def get_mcp_client() -> Any:
-    """MCP 客户端单例。懒加载，避免每次对话都建连接。"""
-    global _client
-    if _client is None:
+def _server_config(name: str) -> dict:
+    """构造 MultiServerMCPClient 的连接配置。
+
+    返回类型写成 dict（而不是 dict[str, dict[str, str]]）：
+    langchain-mcp-adapters 期望的是 TypedDict 形式的 Connection，
+    精确的嵌套类型会让 pyright 判不兼容。
+    """
+    settings = get_settings()
+    if name == "crawler":
+        return {"crawler": {"url": settings.crawler_mcp_url, "transport": "streamable_http"}}
+    return {"web-search": {"url": settings.web_search_mcp_url, "transport": "streamable_http"}}
+
+
+async def get_mcp_client(name: str = "web-search") -> Any:
+    """MCP 客户端（按服务名缓存）。懒加载，避免每次对话都建连接。"""
+    if name not in _clients:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        settings = get_settings()
-        _client = MultiServerMCPClient(
-            {
-                "web-search": {
-                    "url": settings.web_search_mcp_url,
-                    "transport": "streamable_http",
-                }
-            }
-        )
-        logger.info("research.mcp_client_ready", url=settings.web_search_mcp_url)
-    return _client
+        _clients[name] = MultiServerMCPClient(_server_config(name))
+        logger.info("mcp.client_ready", server=name, config=_server_config(name))
+    return _clients[name]
 
 
 def parse_mcp_payload(raw: Any) -> list[dict]:
@@ -71,3 +83,13 @@ def parse_mcp_payload(raw: Any) -> list[dict]:
         return [x for x in raw if isinstance(x, dict)]
 
     return []
+
+
+def parse_mcp_dict(raw: Any) -> dict:
+    """把 MCP 工具返回值归一化成 dict（对象类工具用，如 export/clean）。"""
+    items = parse_mcp_payload(raw)
+    if not items:
+        return {}
+    if len(items) == 1:
+        return items[0]
+    return {"items": items}

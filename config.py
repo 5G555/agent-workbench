@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     # web 搜索由独立的 MCP server 提供（mcp_servers/web_search_server.py），
     # research agent 通过 MCP 协议调用工具，不直接依赖具体搜索厂商。
     web_search_mcp_url: str = "http://127.0.0.1:8765/mcp"
+    # 爬虫工具 MCP（任务查询 / 导出 / 清理），与搜索服务分开部署
+    crawler_mcp_url: str = "http://127.0.0.1:8766/mcp"
 
     # ── Web 搜索（research agent 用）──
     tavily_api_key: str = ""

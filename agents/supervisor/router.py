@@ -3,7 +3,8 @@
 三个去处：
     qa        内部知识库（私有、需权限）
     research  公开互联网（时效、外部事实）
-    crawler   主动采集指定网页（抓数据落库，代价最大）
+'    crawler   主动采集指定网页（抓数据落库，代价最大）
+    ops       管理已采集的任务（查任务 / 导出文件 / 清理导出目录）'
 
 为什么要"先确认"：
     qa 和 research 都是只读、秒级、无副作用；而 crawler 会真的去访问外部站点、
@@ -73,7 +74,38 @@ CRAWL_KEYWORDS = (
 # 隐含采集：想拿"别人的页面数据"做对比分析，但没明说要抓
 IMPLICIT_CRAWL_HINTS = ("竞品", "同行", "对标", "他们网站", "官网数据")
 
+# 运维意图关键词：查任务、导出、清理这些"动作"不值得过一遍模型
+OPS_KEYWORDS = (
+    "清理",
+    "清掉",
+    "删除导出",
+    "删掉导出",
+    "导出",
+    "任务列表",
+    "最近的爬取",
+    "爬取任务",
+    "采集任务",
+    "抓取任务",
+    "导出目录",
+    "任务记录",
+    "有哪些任务",
+)
+
 URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\"']+")
+
+
+def is_ops_intent(text: str) -> bool:
+    """是不是在让我管理采集任务（而不是提问或采集新页面）。
+
+    排除法很重要："抓取任务列表"是运维，"抓取这个网页"是采集。
+    所以带 URL 的采集请求归 crawler，不归运维。
+    """
+    lowered = (text or "").lower()
+    if not lowered:
+        return False
+    if not any(keyword in lowered for keyword in OPS_KEYWORDS):
+        return False
+    return not detect_url(text)
 
 
 def detect_url(text: str) -> str:
@@ -97,7 +129,7 @@ def implies_crawl(text: str) -> bool:
 class RouteDecision(BaseModel):
     """路由结果。"""
 
-    agent: Literal["qa", "research", "crawler"] = Field(default="qa")
+    agent: Literal["qa", "research", "crawler", "ops"] = Field(default="qa")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
@@ -151,13 +183,19 @@ def resolve_confirmation(decision: RouteDecision, query: str) -> ResolvedRoute:
 async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
     """给问题选一个 Agent，并判断是否需确认。
 
-    两级路由：
+    路由顺序：
+        0. 运维关键词（清理/导出/任务列表）→ ops，直接命中，不劳模型
         1. 本地 BERT（~10ms）：置信度 ≥ 阈值就直接采信
         2. 否则回退给大模型（~1.5s）：意图模糊时更稳
-    两级都失败时退回 qa（本地答错还能升级到联网）。
+    都失败时退回 qa（本地答错还能升级到联网）。
     """
     if not query.strip():
         return ResolvedRoute(agent="qa", confidence=1.0, reason="空问题")
+
+    if is_ops_intent(query):
+        resolved = ResolvedRoute(agent="ops", confidence=1.0, reason="运维关键词命中")
+        logger.info("supervisor.routed", query=query, agent="ops", need_confirm=False)
+        return resolved
 
     decision = await _route_local(query)
     if decision is None:
@@ -200,7 +238,7 @@ async def _route_local(query: str) -> RouteDecision | None:
         return None
 
     return RouteDecision(
-        agent=cast(Literal["qa", "research", "crawler"], agent),
+        agent=cast(Literal["qa", "research", "crawler", "ops"], agent),
         confidence=confidence,
         reason="本地意图模型",
     )
