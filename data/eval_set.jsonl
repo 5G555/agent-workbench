@@ -1,0 +1,15 @@
+{"question": "你们怎么收费", "expect_mode": "faq", "expect_keywords": ["坐席"], "note": "FAQ 直接命中"}
+{"question": "有免费试用吗", "expect_mode": "faq", "expect_keywords": ["14 天", "试用"], "note": "FAQ 直接命中"}
+{"question": "哪几种情况可以退款", "expect_sources": ["02_计费与套餐"], "expect_keywords": ["7 天"], "note": "FAQ 可能不命中，走 RAG"}
+{"question": "年付打几折", "expect_sources": ["02_计费与套餐"], "expect_keywords": ["8.5"], "note": "数字类事实"}
+{"question": "P1 故障多久恢复", "expect_mode": "faq", "expect_keywords": ["2 小时"], "note": "FAQ 命中"}
+{"question": "服务可用性不达标怎么赔偿", "expect_mode": "faq", "expect_keywords": ["代金券"], "note": "FAQ 命中"}
+{"question": "扫描版 PDF 怎么导入", "expect_sources": ["05_常见故障排查"], "expect_keywords": ["OCR"], "note": "OCR 相关"}
+{"question": "值班手册里夜班时间是几点到几点", "expect_sources": ["07_值班手册_扫描版"], "expect_keywords": ["21:00"], "note": "考察扫描件 OCR 后能否被检索"}
+{"question": "交接班要求是什么", "expect_sources": ["07_值班手册_扫描版"], "expect_keywords": ["工单"], "note": "同上"}
+{"question": "培训课件里提到了哪几个误区", "expect_sources": ["06_培训课件"], "expect_keywords": ["切分", "FAQ"], "note": "考察 pptx 内容"}
+{"question": "私有化部署最低配置是多少", "expect_sources": ["04_安装与部署"], "expect_keywords": ["16G", "8 核"], "note": "docx 内容"}
+{"question": "知识库支持哪些文件格式导入", "expect_sources": ["01_产品概览"], "expect_keywords": ["Word", "PDF"], "note": "产品能力"}
+{"question": "支持哪些渠道接入", "expect_sources": ["01_产品概览"], "expect_keywords": ["企业微信"], "note": "曾经排错过的用例"}
+{"question": "你好，你能做什么", "expect_mode": "llm_direct", "note": "通用知识，不该检索"}
+{"question": "今天天气怎么样", "expect_mode": "llm_direct", "note": "通用知识，不该检索"}

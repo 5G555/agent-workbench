@@ -17,10 +17,12 @@ dist/
 
 # 运行产物
 var/
-data/
-logs/
-# 评估集是测试资产，要进版本库（其余 data/ 仍是本地语料）
+# 注意：这里必须写 data/* 而不是 data/——父目录被整体忽略时，
+# 下面的 ! 例外不会生效（git 的已知行为）
+data/*
+# 评估集是测试资产，要进版本库
 !data/eval_set.jsonl
+logs/
 *.log
 *.db
 *.sqlite3
