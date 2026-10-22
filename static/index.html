@@ -142,6 +142,55 @@
   /* 登录遮罩 */
   .overlay { position: fixed; inset: 0; background: rgba(10,12,16,.9); display: flex; align-items: center; justify-content: center; z-index: 50; }
   .overlay.hidden { display: none; }
+.view-hidden { display: none !important; }
+
+/* ── 顶部导航（对话 / 爬虫 分区）── */
+.navtabs { display: flex; gap: 6px; padding: 8px 12px; }
+.navtab {
+  flex: 1; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.06); color: inherit; font-size: 13px;
+  border: 1px solid transparent; transition: .15s;
+}
+.navtab:hover { background: rgba(255,255,255,.12); }
+.navtab.active { background: rgba(99,102,241,.28); border-color: rgba(99,102,241,.6); font-weight: 600; }
+
+/* ── 爬虫分区 ── */
+.crawler-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.crawlwrap { display: flex; gap: 14px; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.crawlform { flex: 1.1; min-width: 0; }
+.crawltasks { flex: 1; min-width: 0; }
+.crawlform h3, .crawltasks h3, .crawldetail h3 { margin: 0 0 8px; font-size: 13px; opacity: .75; font-weight: 600; }
+.crawlform input, .crawlform label {
+  display: block; width: 100%; margin-bottom: 8px; font-size: 13px; color: inherit;
+}
+.crawlform input[type=text], .crawlform input[type=url], .crawlform input[type=number], .crawlform input:not([type]) {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.25); color: inherit;
+}
+.crawlform .row3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crawlform .row3 label { width: auto; margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+.crawlform .row3 input[type=number] { width: 64px; }
+.tasklist { max-height: 168px; overflow: auto; }
+.taskrow {
+  display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px;
+  border-radius: 7px; cursor: pointer; font-size: 12.5px; border: 1px solid transparent;
+}
+.taskrow:hover { background: rgba(255,255,255,.07); }
+.taskrow.active { background: rgba(99,102,241,.22); border-color: rgba(99,102,241,.5); }
+.taskrow .tgoal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.taskrow .tmeta { opacity: .6; white-space: nowrap; }
+.crawldetail { flex: 1; overflow: auto; padding: 14px 18px; }
+.crawldetail .statgrid { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
+.crawldetail .statgrid div { font-size: 12.5px; opacity: .85; }
+.crawldetail .statgrid b { font-size: 16px; display: block; margin-top: 2px; }
+.crawldetail table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 16px; }
+.crawldetail th, .crawldetail td {
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.08);
+  max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.crawldetail th { opacity: .65; font-weight: 600; position: sticky; top: 0; background: #14161f; }
+.crawldetail .tools { display: flex; gap: 8px; margin-bottom: 12px; }
+
   .card { width: 330px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
   .card h2 { margin: 0; font-size: 17px; }
   .card input { height: 40px; padding: 0 12px; border-radius: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); outline: none; font-size: 14px; }
@@ -156,6 +205,10 @@
 
 <aside>
   <div class="brand">Myagent<small>企业知识库问答</small></div>
+  <nav class="navtabs">
+    <button class="navtab active" data-view="chat">💬 对话</button>
+    <button class="navtab" data-view="crawler">🕷️ 爬虫</button>
+  </nav>
   <div class="actions">
     <button class="primary" id="newSession">＋ 新会话</button>
     <button id="logoutBtn">退出</button>
@@ -163,7 +216,7 @@
   <div class="sessions" id="sessions"></div>
 </aside>
 
-<main>
+<main id="viewChat">
   <header>
     <button class="menu-btn" id="menuBtn" title="会话列表">☰</button>
     <h1 id="title">新会话</h1>
@@ -188,6 +241,41 @@
     </div>
     <div class="hint">回车发送，Shift+回车换行。答案会标注命中方式（FAQ / 知识库检索 / 直接回答）。</div>
   </footer>
+</main>
+
+<main id="viewCrawler" class="view-hidden">
+  <header>
+    <button class="menu-btn" id="menuBtn2" title="会话列表">☰</button>
+    <h1>网页采集</h1>
+    <span class="meta" id="crawlMeta">指定入口 URL，抓正文并抽取结构化记录</span>
+    <span class="spacer"></span>
+    <button class="pill" id="crawlRefresh">刷新任务</button>
+  </header>
+
+  <div class="crawler-view">
+    <div class="crawlwrap">
+      <section class="crawlform">
+        <h3>新建任务</h3>
+        <input id="crawlUrl" placeholder="入口 URL，例如 https://quotes.toscrape.com/" />
+        <input id="crawlGoal" placeholder="任务目标（决定跟进哪些链接），例如：抓名言和作者" />
+        <div class="row3">
+          <label>最多页数 <input id="crawlPages" type="number" min="1" max="20" value="3" /></label>
+          <label><input id="crawlExport" type="checkbox" /> 抓完导出为文件</label>
+          <button class="primary" id="crawlRun">开始抓取</button>
+        </div>
+        <div class="err" id="crawlErr"></div>
+      </section>
+
+      <section class="crawltasks">
+        <h3>最近任务</h3>
+        <div class="tasklist" id="taskList"><div class="hint" style="opacity:.6">还没有任务</div></div>
+      </section>
+    </div>
+
+    <div class="crawldetail" id="crawlDetail">
+      <div class="hint" style="opacity:.6">选一个任务查看抓取详情，或先在左边新建任务。</div>
+    </div>
+  </div>
 </main>
 
 <div class="backdrop" id="backdrop"></div>
@@ -684,6 +772,177 @@ function renderConfirm(bubble, info) {
   box.appendChild(cancel);
   bubble.appendChild(box);
 }
+
+// ══════════════════════════════════════════════════════
+// 爬虫分区：独立于对话的一套界面（类比 EduAgent 的独立功能入口）
+// ══════════════════════════════════════════════════════
+function esc(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (ch) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+  ));
+}
+
+function switchView(name) {
+  const chat = document.getElementById("viewChat");
+  const crawler = document.getElementById("viewCrawler");
+  chat.classList.toggle("view-hidden", name !== "chat");
+  crawler.classList.toggle("view-hidden", name !== "crawler");
+  document.querySelectorAll(".navtab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.view === name);
+  });
+  if (name === "crawler") loadCrawlTasks();
+}
+
+let currentTaskId = 0;
+
+async function loadCrawlTasks() {
+  const box = document.getElementById("taskList");
+  try {
+    const res = await apiFetch("/api/v1/crawler/tasks?limit=20");
+    const tasks = await res.json();
+    if (!tasks.length) {
+      box.innerHTML = '<div class="hint" style="opacity:.6">还没有任务</div>';
+      return;
+    }
+    box.innerHTML = tasks.map((t) => `
+      <div class="taskrow${t.id === currentTaskId ? " active" : ""}" data-id="${t.id}">
+        <span class="tgoal">#${t.id} ${esc(t.goal || t.entry_url)}</span>
+        <span class="tmeta">${t.pages_fetched}页/${t.records_extracted}条</span>
+      </div>`).join("");
+    box.querySelectorAll(".taskrow").forEach((row) => {
+      row.onclick = () => openCrawlTask(Number(row.dataset.id));
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="err">加载任务失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function runCrawl() {
+  const err = document.getElementById("crawlErr");
+  const btn = document.getElementById("crawlRun");
+  err.textContent = "";
+  const url = document.getElementById("crawlUrl").value.trim();
+  const goal = document.getElementById("crawlGoal").value.trim();
+  const pages = Number(document.getElementById("crawlPages").value) || 3;
+  const exportFile = document.getElementById("crawlExport").checked;
+
+  if (!url) { err.textContent = "请填写入口 URL"; return; }
+
+  btn.disabled = true;
+  btn.textContent = "抓取中…";
+  document.getElementById("crawlMeta").textContent = "正在抓取，通常需要 5~30 秒…";
+  try {
+    const res = await apiFetch("/api/v1/crawler/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entry_url: url, goal, max_pages: pages, export: exportFile,
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      err.textContent = data.error_msg || "抓取失败";
+      return;
+    }
+    document.getElementById("crawlMeta").textContent =
+      `任务 #${data.task_id} 完成：${data.pages} 页 / ${data.records} 条`;
+    if (data.export_dir) {
+      err.textContent = "";
+      addRow("assistant", `已导出到：\n\`${data.export_dir}\``);
+    }
+    currentTaskId = data.task_id;
+    await loadCrawlTasks();
+    await openCrawlTask(data.task_id);
+  } catch (e) {
+    err.textContent = "抓取失败：" + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "开始抓取";
+  }
+}
+
+async function openCrawlTask(taskId) {
+  currentTaskId = taskId;
+  document.querySelectorAll(".taskrow").forEach((row) => {
+    row.classList.toggle("active", Number(row.dataset.id) === taskId);
+  });
+  const box = document.getElementById("crawlDetail");
+  box.innerHTML = '<div class="hint" style="opacity:.6">加载中…</div>';
+  try {
+    const [task, pages, records] = await Promise.all([
+      apiFetch(`/api/v1/crawler/tasks/${taskId}`).then((r) => r.json()),
+      apiFetch(`/api/v1/crawler/pages/${taskId}`).then((r) => r.json()),
+      apiFetch(`/api/v1/crawler/records/${taskId}?limit=30`).then((r) => r.json()),
+    ]);
+    if (!task.found) { box.innerHTML = '<div class="err">任务不存在</div>'; return; }
+
+    const fields = [];
+    records.forEach((rec) => Object.keys(rec.data || {}).forEach((k) => {
+      if (!fields.includes(k)) fields.push(k);
+    }));
+    const shown = fields.slice(0, 6);
+
+    box.innerHTML = `
+      <h3>任务 #${task.task_id}</h3>
+      <div class="statgrid">
+        <div>状态<b>${esc(task.status)}</b></div>
+        <div>页面<b>${task.pages}</b></div>
+        <div>记录<b>${task.records}</b></div>
+        <div>策略<b>${esc(task.strategy || "-")}</b></div>
+        <div>停止原因<b>${esc(task.stop_reason || "-")}</b></div>
+      </div>
+      <div class="tools">
+        <button class="primary" id="taskExport">📁 导出为文件</button>
+        <span class="hint" style="opacity:.6;align-self:center">入口：${esc(task.entry_url)}</span>
+      </div>
+      <h3>页面（${(pages || []).length}）</h3>
+      <table>
+        <thead><tr><th>#</th><th>标题</th><th>字数</th><th>HTML</th><th>URL</th></tr></thead>
+        <tbody>${(pages || []).map((p) => `
+          <tr><td>${p.id}</td><td>${esc(p.title || "-")}</td><td>${p.char_count}</td>
+          <td>${p.html_len ? p.html_len + " 字符" : "未存"}</td><td>${esc(p.url)}</td></tr>`).join("")}
+        </tbody>
+      </table>
+      <h3>结构化记录${records.length >= 30 ? "（前 30 条）" : `（${records.length} 条）`}</h3>
+      <table>
+        <thead><tr>${shown.map((f) => `<th>${esc(f)}</th>`).join("")}</tr></thead>
+        <tbody>${records.map((rec) => `<tr>${shown.map((f) => `
+          <td>${esc(rec.data?.[f] ?? "")}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>`;
+
+    document.getElementById("taskExport").onclick = () => exportCrawlTask(taskId);
+  } catch (e) {
+    box.innerHTML = `<div class="err">加载详情失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function exportCrawlTask(taskId) {
+  try {
+    const res = await apiFetch(`/api/v1/crawler/export/${taskId}`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      const kb = (data.bytes_written / 1024).toFixed(1);
+      addRow("assistant",
+        `已导出任务 #${data.task_id}：\n\`${data.directory}\`\n\n` +
+        `页面 ${data.pages} 个 / 记录 ${data.records} 条 / ${kb} KB`);
+    } else {
+      addRow("assistant", "导出失败：" + (data.error_msg || "未知原因"));
+    }
+  } catch (e) {
+    addRow("assistant", "导出失败：" + e.message);
+  }
+}
+
+document.querySelectorAll(".navtab").forEach((btn) => {
+  btn.onclick = () => switchView(btn.dataset.view);
+});
+document.getElementById("crawlRun").onclick = runCrawl;
+document.getElementById("crawlRefresh").onclick = loadCrawlTasks;
+document.getElementById("menuBtn2").onclick = () => {
+  document.getElementById("backdrop").classList.add("show");
+  document.querySelector("aside").classList.add("show");
+};
 
 async function send() {
   const message = input.value.trim();
