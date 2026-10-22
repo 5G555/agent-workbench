@@ -11,13 +11,13 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from agents.research.collector import collect_multi
+from agents.research.outcome import SearchOutcome, SearchStatus
 from agents.research.prompts import (
     NO_RESULT_ANSWER,
     PLAN_SYSTEM,
@@ -26,15 +26,13 @@ from agents.research.prompts import (
     SYNTH_USER,
 )
 from agents.research.state import ResearchState
-from agents.research.tools import SearchResult, dedup_results
+from agents.research.tools import SearchResult
 from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
 from core.streaming import stream_or_invoke
 
 logger = get_logger(__name__)
-
-_mcp_client: Any = None
 
 
 class Plan(BaseModel):
@@ -52,61 +50,6 @@ def _extract_query(state: ResearchState) -> str:
         if isinstance(msg, HumanMessage):
             return str(msg.content)
     return ""
-
-
-async def _get_mcp_client() -> Any:
-    """MCP 客户端单例。懒加载，避免每次对话都建连接。"""
-    global _mcp_client
-    if _mcp_client is None:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-
-        settings = get_settings()
-        _mcp_client = MultiServerMCPClient(
-            {
-                "web-search": {
-                    "url": settings.web_search_mcp_url,
-                    "transport": "streamable_http",
-                }
-            }
-        )
-        logger.info("research.mcp_client_ready", url=settings.web_search_mcp_url)
-    return _mcp_client
-
-
-def parse_mcp_payload(raw: Any) -> list[dict]:
-    """把 MCP 工具返回值归一化成 list[dict]。
-
-    FastMCP 把 list[dict] 序列化成多个 content block：
-        [{"type": "text", "text": "{\"title\": ...}"}, ...]
-    这里兼容三种形状：content blocks、单个 JSON 字符串、已是 list[dict]。
-    """
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-        return data if isinstance(data, list) else [data]
-
-    if isinstance(raw, list):
-        if raw and isinstance(raw[0], dict) and "type" in raw[0]:
-            items: list[dict] = []
-            for block in raw:
-                if block.get("type") != "text":
-                    continue
-                try:
-                    parsed = json.loads(block.get("text", ""))
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(parsed, dict):
-                    items.append(parsed)
-                elif isinstance(parsed, list):
-                    items.extend(x for x in parsed if isinstance(x, dict))
-            return items
-        return [x for x in raw if isinstance(x, dict)]
-
-    return []
 
 
 async def plan_node(state: ResearchState) -> dict[str, Any]:
@@ -144,77 +87,72 @@ async def plan_node(state: ResearchState) -> dict[str, Any]:
 
 
 async def search_node(state: ResearchState) -> dict[str, Any]:
-    """② 并发调 MCP 的 web_search 工具，结果去重。"""
+    """② 并发调 MCP 的 web_search 工具，结果去重。
+
+    采集逻辑在 collector 里，这里只负责把结果和"状态"写进 state：
+    搜失败和没搜到必须区分，否则上层只能统一说"没找到"。
+    """
     subqueries = state.get("subqueries") or []
     if not subqueries:
-        return {"search_results": []}
+        return {"search_results": [], "search_status": SearchStatus.NO_RESULT.value}
 
-    settings = get_settings()
-    try:
-        client = await _get_mcp_client()
-        tools = await client.get_tools()
-        search_tool = next((t for t in tools if t.name == "web_search"), None)
-        if search_tool is None:
-            logger.error("research.tool_missing", tools=[t.name for t in tools])
-            return {"search_results": [], "error": "MCP 服务未提供 web_search 工具"}
+    max_items = get_settings().research_results_per_query * 2
+    outcome = await collect_multi(
+        str(state.get("original_query") or ""),
+        subqueries,
+        max_items,
+    )
 
-        async def one(q: str) -> list[SearchResult]:
-            try:
-                raw = await search_tool.ainvoke(
-                    {"query": q, "max_results": settings.research_results_per_query}
-                )
-            except Exception as exc:
-                logger.warning("research.search_failed", query=q, error=str(exc))
-                return []
-            return [
-                SearchResult(
-                    title=str(item.get("title", "")),
-                    url=str(item.get("url", "")),
-                    content=str(item.get("content", "")),
-                    score=float(item.get("score", 0.0) or 0.0),
-                )
-                for item in parse_mcp_payload(raw)
-            ]
-
-        batches = await asyncio.gather(*[one(q) for q in subqueries])
-
-        class _Batch:
-            def __init__(self, results: list[SearchResult]) -> None:
-                self.results = results
-
-        merged = dedup_results([_Batch(b) for b in batches])  # type: ignore[arg-type]
-        # 只保留前若干条，避免上下文过长
-        merged = merged[: settings.research_results_per_query * 2]
-
-        logger.info(
-            "research.searched",
-            subqueries=len(subqueries),
-            raw=sum(len(b) for b in batches),
-            unique=len(merged),
-        )
-        return {"search_results": [r.__dict__ for r in merged]}
-    except Exception as exc:
-        logger.error("research.search_node_failed", error=str(exc))
-        return {"search_results": [], "error": str(exc)}
+    logger.info(
+        "research.searched",
+        subqueries=len(subqueries),
+        status=outcome.status.value,
+        items=len(outcome.items),
+        detail=outcome.detail,
+    )
+    return {
+        "search_results": [e.__dict__ for e in outcome.items],
+        "search_status": outcome.status.value,
+        "search_detail": outcome.detail,
+    }
 
 
 async def synthesize_node(state: ResearchState) -> dict[str, Any]:
-    """③ 依据资料作答，并要求标注 [序号]。没资料时直接给固定答复，不调模型。"""
+    """③ 依据资料作答，并要求标注 [序号]。
+
+    没资料时按"状态"给不同答复：
+        搜失败 / 限流 / 没配 key → 明确说是检索出了问题，提示稍后重试
+        真的没搜到               → 说没找到，不怪服务
+    两者不能混为一谈，否则用户会把"服务挂了"理解成"知识库没有"。
+    """
     query = state.get("original_query") or ""
     results = state.get("search_results") or []
+    status_value = str(state.get("search_status") or SearchStatus.NO_RESULT.value)
+    status = (
+        SearchStatus(status_value)
+        if status_value in SearchStatus.__members__.values()
+        else SearchStatus.NO_RESULT
+    )
 
     if not results:
-        logger.info("research.no_result", query=query)
+        outcome = SearchOutcome(
+            status=status,
+            detail=str(state.get("search_detail") or ""),
+        )
+        message = outcome.user_message() or NO_RESULT_ANSWER
+        logger.info("research.no_result", query=query, status=status.value)
         return {
-            "answer": NO_RESULT_ANSWER,
-            "answer_mode": "no_result",
+            "answer": message,
+            "answer_mode": "search_failed" if status is not SearchStatus.NO_RESULT else "no_result",
             "citations": [],
-            "messages": [AIMessage(content=NO_RESULT_ANSWER)],
+            "messages": [AIMessage(content=message)],
             "structured_output": {
-                "answer_mode": "no_result",
+                "answer_mode": message
+                and ("search_failed" if status is not SearchStatus.NO_RESULT else "no_result"),
                 "sources": [],
                 "citations": [],
                 "subqueries": state.get("subqueries") or [],
+                "search_status": status.value,
             },
         }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from agents.research.nodes import parse_mcp_payload
+from agents.research.mcp_client import parse_mcp_payload
 from agents.research.tools import SearchResponse, SearchResult, dedup_results
 
 

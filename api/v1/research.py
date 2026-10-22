@@ -41,6 +41,8 @@ class ResearchResponse(BaseModel):
     answer: str = ""
     citations: list[str] = Field(default_factory=list)
     subqueries: list[str] = Field(default_factory=list)
+    # ok / no_result / rate_limited / no_key / failed
+    search_status: str = ""
     fallback_used: bool = False
     error_msg: str | None = None
 
@@ -86,6 +88,7 @@ async def ask(
         answer=result.content,
         citations=[str(c) for c in (structured.get("citations") or [])],
         subqueries=[str(s) for s in (structured.get("subqueries") or [])],
+        search_status=str(result.metadata.get("web_status") or ""),
         fallback_used=result.fallback_used,
         error_msg=result.error_msg,
     )

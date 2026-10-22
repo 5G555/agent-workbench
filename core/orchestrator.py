@@ -137,7 +137,7 @@ class Orchestrator:
             3. 统一作答：公网结果只是补充依据，标注为"公网资料，仅供参考"
         """
         from agents.qa.compose import compose_answer
-        from agents.research.collector import collect_web_evidence
+        from agents.research.collector import collect_web
         from agents.research.evidence import EvidenceSet
         from agents.supervisor.privacy import is_private, sanitize
 
@@ -153,13 +153,18 @@ class Orchestrator:
             return base
 
         safe_query = sanitize(request.user_message)
-        items = await collect_web_evidence(safe_query)
-        if not items:
-            logger.info("orchestrator.web_empty", query=safe_query)
+        outcome = await collect_web(safe_query)
+        if not outcome.usable:
+            # 分清楚"服务出问题"和"确实没资料"：前者要提示稍后重试，别让用户以为知识库缺失
+            logger.info("orchestrator.web_unusable", query=safe_query, status=outcome.status.value)
+            message = outcome.user_message()
+            if message:
+                base.content = f"{base.content}\\n\\n{message}"
+            base.metadata["web_status"] = outcome.status.value
             return base
 
         evidence = EvidenceSet()
-        evidence.extend(items)
+        evidence.extend(outcome.items)
         answer, cited = await compose_answer(request.user_message, evidence, on_token=on_token)
 
         return AgentResponse(
@@ -172,7 +177,12 @@ class Orchestrator:
                 "citations": cited,
                 "kb_available": False,
             },
-            metadata={**base.metadata, "escalated_from": "qa", "web_items": len(items)},
+            metadata={
+                **base.metadata,
+                "escalated_from": "qa",
+                "web_items": len(outcome.items),
+                "web_status": outcome.status.value,
+            },
         )
 
     async def handle_auto(self, request: AgentRequest) -> AgentResponse:
@@ -464,12 +474,18 @@ class Orchestrator:
             str(last_message.text) if hasattr(last_message, "text") else str(last_message.content)
         )
 
+        metadata: dict[str, Any] = {}
+        # research 图会把联网检索状态写进 state，透出来让调用方分得清"搜失败"和"没搜到"
+        if result_state.get("search_status"):
+            metadata["web_status"] = str(result_state["search_status"])
+
         return AgentResponse(
             success=True,
             agent_type=request.agent_type,
             content=content,  # 主文本响应
             structured=result_state.get("structured_output"),  # 结构化数据（报告/评分，若有）
             fallback_used=result_state.get("fallback_used", False),  # 是否走了降级
+            metadata=metadata,
         )
 
     async def _run_pipeline(self, request: AgentRequest) -> PipelineResult:

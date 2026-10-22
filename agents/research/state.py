@@ -32,6 +32,8 @@ class ResearchState(TypedDict, total=False):
     # 检索阶段
     subqueries: list[str]  # 拆出来的子问题
     search_results: list[dict]  # [{title, url, content, score}]，已按 URL 去重
+    search_status: str  # ok / no_result / rate_limited / no_key / failed
+    search_detail: str  # 失败时的原始错误，供日志排查
 
     # 生成阶段
     answer: str
