@@ -167,6 +167,10 @@ python -c "import asyncio; from langchain_mcp_adapters.client import MultiServer
 
 ```powershell
 python -c "import asyncio; from agents.qa.cache import bump_cache_version; print(asyncio.run(bump_cache_version()))"
+
+# 旧版本的键不会自动删，攒多了跑一下清理（先统计，确认后加 --apply）
+python -m scripts.clean_cache
+python -m scripts.clean_cache --apply
 ```
 
 ## 多租户与细粒度权限

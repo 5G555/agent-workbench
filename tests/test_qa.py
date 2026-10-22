@@ -21,16 +21,35 @@ class FakeCache:
     def __init__(self) -> None:
         self.stored: list[tuple] = []
         self.lookups: list[str] = []
-        self.tenants: list[str] = []
+        self.scopes: list[tuple[str, str, str]] = []
 
-    async def get(self, query: str, tenant_id: str = ""):
+    async def get(
+        self,
+        query: str,
+        tenant_id: str = "",
+        department: str = "",
+        role: str = "",
+        namespace: str = "",
+    ):
         self.lookups.append(query)
-        self.tenants.append(tenant_id)
+        self.scopes.append((tenant_id, department, role))
         return None
 
-    async def set(self, query: str, answer: str, mode: str, sources=None, tenant_id: str = ""):
+    async def set(
+        self,
+        query: str,
+        answer: str,
+        mode: str,
+        sources=None,
+        tenant_id: str = "",
+        department: str = "",
+        role: str = "",
+        namespace: str = "",
+        ttl: int | None = None,
+        citations=None,
+    ):
         self.stored.append((query, answer, mode))
-        self.tenants.append(tenant_id)
+        self.scopes.append((tenant_id, department, role))
 
 
 # ── 缓存与多轮上下文 ───────────────────────────────────────

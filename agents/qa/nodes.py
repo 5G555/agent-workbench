@@ -186,6 +186,9 @@ async def cache_write_node(state: QAState) -> dict[str, Any]:
         mode=state.get("answer_mode") or "rag",
         sources=state.get("sources") or [],
         tenant_id=_tenant(state),
+        # 必须和 cache_lookup 用同一套范围，否则写进去也永远查不回来
+        department=str(state.get("department") or "*"),
+        role=str(state.get("role") or "user"),
     )
     return {}
 
