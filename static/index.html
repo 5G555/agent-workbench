@@ -166,6 +166,10 @@
     <h1 id="title">新会话</h1>
     <span class="meta" id="meta">连接中…</span>
     <span class="spacer"></span>
+    <select id="mode" title="回答模式">
+      <option value="qa">知识库问答</option>
+      <option value="research">联网研究</option>
+    </select>
     <select id="source"><option value="">全部来源</option></select>
     <button class="pill active" id="streamToggle">流式：开</button>
   </header>
@@ -200,11 +204,12 @@
 <script>
 "use strict";
 const API = "/api/v1/qa";
+const API_RESEARCH = "/api/v1/research";
 const AUTH = "/api/v1/auth";
 
 const $ = (id) => document.getElementById(id);
 const chat = $("chat"), input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
-const meta = $("meta"), title = $("title"), sourceSel = $("source");
+const meta = $("meta"), title = $("title"), sourceSel = $("source"), modeSel = $("mode");
 const sessionsBox = $("sessions"), streamToggle = $("streamToggle");
 const loginBox = $("login"), lerr = $("lerr"), lu = $("lu"), lp = $("lp");
 
@@ -505,7 +510,8 @@ function startNewSession() {
 // ── 提问 ───────────────────────────────────────────────
 async function askStream(message, bubble) {
   abortCtl = new AbortController();
-  const res = await apiFetch(`${API}/ask/stream`, {
+  const base = modeSel.value === "research" ? API_RESEARCH : API;
+  const res = await apiFetch(`${base}/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
@@ -547,7 +553,8 @@ async function askStream(message, bubble) {
 }
 
 async function askOnce(message, bubble) {
-  const res = await apiFetch(`${API}/ask`, {
+  const base = modeSel.value === "research" ? API_RESEARCH : API;
+  const res = await apiFetch(`${base}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: currentSession, message, source: sourceSel.value || null }),
@@ -585,6 +592,13 @@ stopBtn.onclick = () => { if (abortCtl) abortCtl.abort(); };
 input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
 input.addEventListener("input", () => { input.style.height = "44px"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
 streamToggle.onclick = () => { streaming = !streaming; streamToggle.textContent = "流式：" + (streaming ? "开" : "关"); streamToggle.classList.toggle("active", streaming); };
+modeSel.onchange = () => {
+  const isResearch = modeSel.value === "research";
+  sourceSel.style.display = isResearch ? "none" : "";
+  input.placeholder = isResearch
+    ? "问一个需要联网查证的问题，比如：LangGraph 1.x 有哪些新特性"
+    : "问点什么，比如：你们怎么收费 / 扫描版 PDF 怎么导入";
+};
 $("newSession").onclick = startNewSession;
 
 async function loadSources() {

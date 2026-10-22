@@ -30,6 +30,7 @@ _HTTP_SYNC_CLIENT = httpx.Client(  # 同步客户端（给 invoke 用）
 # 这里的_AGENT_MODEL_ROUTING键对应的是业务名称，值是每个业务选择的哪个模型厂商
 _AGENT_MODEL_ROUTING: dict[str, str] = {
     "qa": "deepseek-chat",  # 智能问答
+    "research": "deepseek-chat",  # 联网研究（拆子问题 + 汇总）
 }
 
 

@@ -29,7 +29,8 @@ class ExecutionMode(StrEnum):
 class AgentType(StrEnum):
     """Agent 类型标识（继承 str，可直接当字符串用）。"""
 
-    QA = "qa"  # 智能问答
+    QA = "qa"  # 智能问答（内部知识库）
+    RESEARCH = "research"  # 联网研究（MCP 工具 + 多步检索）
 
 
 class AgentRequest(BaseModel):
@@ -104,6 +105,11 @@ class Orchestrator:
                 from agents.qa.graph import build_qa_graph
 
                 self._agent_graphs[agent_type] = build_qa_graph()
+
+            elif agent_type == AgentType.RESEARCH:
+                from agents.research.graph import build_research_graph
+
+                self._agent_graphs[agent_type] = build_research_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")

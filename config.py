@@ -113,12 +113,15 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
-    # ── MCP Server 地址 ──
-    kb_mcp_server_url: str = "http://localhost:8000/mcp/kb"
-    web_search_mcp_url: str = "http://localhost:8000/mcp/web-search"
+    # ── MCP 服务地址 ──
+    # web 搜索由独立的 MCP server 提供（mcp_servers/web_search_server.py），
+    # research agent 通过 MCP 协议调用工具，不直接依赖具体搜索厂商。
+    web_search_mcp_url: str = "http://127.0.0.1:8765/mcp"
 
-    # ── Web 搜索（留空则用免费的 DuckDuckGo）──
+    # ── Web 搜索（research agent 用）──
     tavily_api_key: str = ""
+    research_max_subqueries: int = 3  # 一个问题最多拆成几个子查询
+    research_results_per_query: int = 4  # 每个子查询取几条结果
 
     # ── 应用基础配置 ──
     app_env: str = "local"

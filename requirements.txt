@@ -68,6 +68,11 @@ rapidocr-onnxruntime>=1.2,<2     # OCR：扫描版 PDF 与图片
 # 现在锁 1.x 是因为实测可用；将来要升级需改 agents/qa 里 OCR 的调用方式
 # （3.x 返回 RapidOCROutput 对象，不再是 (result, elapsed) 元组）。
 
+# ---- 工具协议（MCP）-------------------------------------------------------
+# mcp 是官方 SDK（server 端 FastMCP）；adapters 让 LangChain 把 MCP 工具当普通 tool 用
+mcp>=1.30
+langchain-mcp-adapters>=0.3
+
 # ---- 可观测性 --------------------------------------------------------------
 langfuse>=2.30                   # LLM 调用链追踪；未配置 key 时应能降级为 no-op
 

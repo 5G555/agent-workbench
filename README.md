@@ -102,6 +102,39 @@ ruff format .
 pyright
 ```
 
+## 两个 Agent 与 MCP
+
+| Agent | 数据来源 | 入口 |
+|---|---|---|
+| `qa` | 内部知识库（Milvus + FAQ + Redis 缓存） | `POST /api/v1/qa/ask` |
+| `research` | 公网（经 MCP 调 web_search 工具） | `POST /api/v1/research/ask` |
+
+**为什么 qa 不用 MCP**：它的检索是同进程内的函数调用，上 MCP 只会多一次网络往返和一个故障点。
+**为什么 research 用 MCP**：web 搜索是外部服务，且要被别的客户端复用，协议化才有价值。
+
+启动 MCP 服务（独立进程，research agent 依赖它）：
+
+```powershell
+python -m mcp_servers.web_search_server
+# 监听 127.0.0.1:8765，端点为 http://127.0.0.1:8765/mcp
+# 暴露的工具：web_search(query, max_results) / fetch_page(url, max_chars)
+```
+
+`.env` 里对应的地址：
+
+```
+WEB_SEARCH_MCP_URL=http://127.0.0.1:8765/mcp
+```
+
+验证工具能连上：
+
+```powershell
+python -c "import asyncio; from langchain_mcp_adapters.client import MultiServerMCPClient as M; print(asyncio.run(M({'ws':{'url':'http://127.0.0.1:8765/mcp','transport':'streamable_http'}}).get_tools()))"
+```
+
+网页前端顶部有模式切换：**知识库问答** / **联网研究**。两者共用同一张会话表，切换不丢上下文。
+
+
 ## 排错
 
 - **`conda : 无法识别`**：执行 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`（本机已设好），然后**重开终端**。
