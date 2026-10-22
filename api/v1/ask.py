@@ -58,6 +58,8 @@ class AskResponse(BaseModel):
     route: dict[str, Any] = Field(default_factory=dict)
     # 联网检索的结果状态：ok / no_result / rate_limited / no_key / failed（空串 = 没走联网）
     web_status: str = ""
+    # 联网时实际使用的时间窗口（空 = 不限）
+    time_range: str = ""
     fallback_used: bool = False
     error_msg: str | None = None
 
@@ -115,6 +117,7 @@ async def ask(
         escalated="escalated_from" in result.metadata,
         route=result.metadata.get("route") or {},
         web_status=str(result.metadata.get("web_status") or ""),
+        time_range=str(result.metadata.get("time_range") or ""),
         fallback_used=result.fallback_used,
         error_msg=result.error_msg,
     )

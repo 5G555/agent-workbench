@@ -36,19 +36,37 @@ mcp = FastMCP("web-search", host=HOST, port=PORT)
 
 
 @mcp.tool()
-async def web_search(query: str, max_results: int = 4) -> list[dict]:
+async def web_search(
+    query: str,
+    max_results: int = 4,
+    time_range: str = "",
+    topic: str = "general",
+) -> list[dict]:
     """Search the public web and return ranked results.
 
     Args:
         query: 搜索词，中文或英文均可。
         max_results: 返回条数，1~10。
+        time_range: 只看多久以内的内容：day / week / month / year，留空表示不限。
+        topic: general（通用）或 news（新闻）。
 
     Returns:
         列表，每项含 title / url / content / score 四个字段。
     """
     n = max(1, min(int(max_results or 4), 10))
-    response = await tavily_search(query, n)
-    logger.info("mcp.web_search", query=query, hits=len(response.results))
+    response = await tavily_search(
+        query,
+        n,
+        time_range=time_range or None,
+        topic=topic or "general",
+    )
+    logger.info(
+        "mcp.web_search",
+        query=query,
+        hits=len(response.results),
+        time_range=time_range or "-",
+        topic=topic or "general",
+    )
     return [result.__dict__ for result in response.results]
 
 

@@ -28,6 +28,7 @@ from agents.research.prompts import (
     SYNTH_USER,
 )
 from agents.research.state import ResearchState
+from agents.research.time_filter import resolve_time_range
 from agents.research.tools import SearchResult
 from config import get_settings
 from core.llm_factory import LLMFactory
@@ -44,6 +45,8 @@ class Plan(BaseModel):
     """模型输出的检索计划。"""
 
     subqueries: list[str] = Field(default_factory=list)
+    # 只对"要最新信息"的问题填值；常识类问题应留空
+    time_range: str = Field(default="")
 
 
 def _is_first_turn(state: ResearchState) -> bool:
@@ -149,6 +152,7 @@ async def plan_node(state: ResearchState) -> dict[str, Any]:
     settings = get_settings()
     max_n = max(1, settings.research_max_subqueries)
     subqueries: list[str] = []
+    model_range = ""
 
     try:
         llm = LLMFactory.get_structured_llm("research", Plan)
@@ -160,6 +164,7 @@ async def plan_node(state: ResearchState) -> dict[str, Any]:
         )
         if isinstance(result, Plan):
             subqueries = [q.strip() for q in result.subqueries if q and q.strip()]
+            model_range = result.time_range
     except Exception as exc:
         logger.warning("research.plan_failed", error=str(exc))
 
@@ -170,8 +175,16 @@ async def plan_node(state: ResearchState) -> dict[str, Any]:
     uniq = [q for q in subqueries if not (q in seen or seen.add(q))]
     subqueries = uniq[:max_n]
 
-    logger.info("research.planned", query=query, subqueries=subqueries)
-    return {"original_query": query, "subqueries": subqueries}
+    # 模型给了就用模型的，没给再用关键词兜底，都没有就不限时间
+    time_range = resolve_time_range(model_range, query)
+
+    logger.info(
+        "research.planned",
+        query=query,
+        subqueries=subqueries,
+        time_range=time_range or "-",
+    )
+    return {"original_query": query, "subqueries": subqueries, "time_range": time_range}
 
 
 async def search_node(state: ResearchState) -> dict[str, Any]:
@@ -189,6 +202,7 @@ async def search_node(state: ResearchState) -> dict[str, Any]:
         str(state.get("original_query") or ""),
         subqueries,
         max_items,
+        time_range=str(state.get("time_range") or ""),
     )
 
     logger.info(

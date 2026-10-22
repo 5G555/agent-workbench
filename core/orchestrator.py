@@ -478,6 +478,8 @@ class Orchestrator:
         # research 图会把联网检索状态写进 state，透出来让调用方分得清"搜失败"和"没搜到"
         if result_state.get("search_status"):
             metadata["web_status"] = str(result_state["search_status"])
+        if result_state.get("time_range"):
+            metadata["time_range"] = str(result_state["time_range"])
 
         return AgentResponse(
             success=True,

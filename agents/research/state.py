@@ -32,6 +32,8 @@ class ResearchState(TypedDict, total=False):
     original_query: str
     # fast = 只用搜索摘要；deep = 允许模型打开网页正文（fetch_page，次数受限）
     depth: str
+    # 检索时间窗口："" 不限 / day / week / month / year（由 planner 判断）
+    time_range: str
 
     # 检索阶段
     subqueries: list[str]  # 拆出来的子问题

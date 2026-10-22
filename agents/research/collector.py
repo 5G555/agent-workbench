@@ -44,7 +44,7 @@ def _to_evidence(items: list[dict], limit: int) -> list[Evidence]:
     return evidence
 
 
-async def collect_web(query: str, max_items: int = 4) -> SearchOutcome:
+async def collect_web(query: str, max_items: int = 4, time_range: str = "") -> SearchOutcome:
     """搜一次公网，返回带状态的结果。"""
     settings = get_settings()
     if not settings.tavily_api_key:
@@ -61,9 +61,13 @@ async def collect_web(query: str, max_items: int = 4) -> SearchOutcome:
                 status=SearchStatus.FAILED, detail="MCP 服务未提供 web_search 工具"
             )
 
-        raw = await search_tool.ainvoke(
-            {"query": query, "max_results": settings.research_results_per_query}
-        )
+        args: dict[str, object] = {
+            "query": query,
+            "max_results": settings.research_results_per_query,
+        }
+        if time_range:  # 只有需要近期信息时才收窄检索窗口
+            args["time_range"] = time_range
+        raw = await search_tool.ainvoke(args)
         evidence = _to_evidence(parse_mcp_payload(raw), max_items)
     except Exception as exc:
         status = classify_error(str(exc))
@@ -71,18 +75,29 @@ async def collect_web(query: str, max_items: int = 4) -> SearchOutcome:
         return SearchOutcome(status=status, detail=str(exc))
 
     status = SearchStatus.OK if evidence else SearchStatus.NO_RESULT
-    logger.info("evidence.web_collected", query=query, status=status.value, items=len(evidence))
+    logger.info(
+        "evidence.web_collected",
+        query=query,
+        status=status.value,
+        items=len(evidence),
+        time_range=time_range or "-",
+    )
     return SearchOutcome(status=status, items=evidence)
 
 
-async def collect_multi(query: str, subqueries: list[str], max_items: int = 6) -> SearchOutcome:
+async def collect_multi(
+    query: str,
+    subqueries: list[str],
+    max_items: int = 6,
+    time_range: str = "",
+) -> SearchOutcome:
     """按多个子问题并发采集，再按 URL 去重。
 
     状态取"最有希望的那个"：只要有一路成功就算成功；
     全部失败时取第一个错误状态，避免把"限流"说成"没找到"。
     """
     queries = subqueries or [query]
-    outcomes = await asyncio.gather(*[collect_web(q, max_items) for q in queries])
+    outcomes = await asyncio.gather(*[collect_web(q, max_items, time_range) for q in queries])
 
     merged: list[Evidence] = []
     seen: set[str] = set()

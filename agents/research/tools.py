@@ -10,6 +10,7 @@ Tavily 的响应字段：title / url / content / score。这里的 content 是�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -55,19 +56,28 @@ class SearchResponse:
         return not self.results
 
 
-async def web_search(query: str, max_results: int | None = None) -> SearchResponse:
+async def web_search(
+    query: str,
+    max_results: int | None = None,
+    time_range: str | None = None,
+    topic: str = "general",
+) -> SearchResponse:
     """调用 Tavily 搜索。失败抛 WebSearchError（交给 with_retry 处理）。"""
     settings = get_settings()
     if not settings.tavily_api_key:
         raise WebSearchError("未配置 TAVILY_API_KEY")
 
-    payload = {
+    payload: dict[str, Any] = {
         "api_key": settings.tavily_api_key,
         "query": query,
         "max_results": max_results or settings.research_results_per_query,
         "search_depth": "basic",
+        "topic": topic or "general",
         "include_answer": False,
     }
+    # time_range 只在需要"近期信息"时传：day / week / month / year
+    if time_range:
+        payload["time_range"] = time_range
 
     try:
         async with httpx.AsyncClient(timeout=25.0, trust_env=False) as client:

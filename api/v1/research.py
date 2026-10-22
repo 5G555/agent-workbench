@@ -45,6 +45,8 @@ class ResearchResponse(BaseModel):
     subqueries: list[str] = Field(default_factory=list)
     # ok / no_result / rate_limited / no_key / failed
     search_status: str = ""
+    # 实际使用的检索时间窗口（空 = 不限）
+    time_range: str = ""
     fallback_used: bool = False
     error_msg: str | None = None
 
@@ -92,6 +94,7 @@ async def ask(
         citations=[str(c) for c in (structured.get("citations") or [])],
         subqueries=[str(s) for s in (structured.get("subqueries") or [])],
         search_status=str(result.metadata.get("web_status") or ""),
+        time_range=str(result.metadata.get("time_range") or ""),
         fallback_used=result.fallback_used,
         error_msg=result.error_msg,
     )
