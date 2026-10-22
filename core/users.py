@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 import asyncio
-
-import asyncpg
+from typing import Any
 
 from config import Settings, get_settings
+from core.db import lease_connection
 from core.logger import get_logger
 from core.security import hash_password
 
@@ -35,15 +35,8 @@ class UserStore:
         self.settings = settings or get_settings()
         self._ready = False
 
-    async def _connect(self) -> asyncpg.Connection:
-        s = self.settings
-        return await asyncpg.connect(
-            host=s.db_host,
-            port=s.db_port,
-            user=s.db_user,
-            password=s.db_password,
-            database=s.db_name,
-        )
+    async def _connect(self) -> Any:
+        return await lease_connection()
 
     async def ensure_table(self) -> None:
         if self._ready:

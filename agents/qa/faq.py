@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
-import asyncpg
 import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
 
 from agents.qa.cache import load_faq_index, save_faq_index
 from config import Settings, get_settings
+from core.db import lease_connection
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,15 +62,8 @@ class FaqStore:
         self._bm25: BM25Okapi | None = None
 
     # ── 连接 ────────────────────────────────────────────────
-    async def _connect(self) -> asyncpg.Connection:
-        s = self.settings
-        return await asyncpg.connect(
-            host=s.db_host,
-            port=s.db_port,
-            user=s.db_user,
-            password=s.db_password,
-            database=s.db_name,
-        )
+    async def _connect(self) -> Any:
+        return await lease_connection()
 
     # ── 建表 ────────────────────────────────────────────────
     async def ensure_table(self) -> None:

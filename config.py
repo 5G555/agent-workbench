@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     rate_limit_per_minute: int = 60  # 每个用户每分钟最多请求数；0 = 不限
 
+    # ── 数据库连接池 ──
+    # 一次问答会碰 3~4 次数据库（FAQ 查询、历史读写、用户校验），
+    # 每次新建连接会在并发时打爆 max_connections，所以统一走连接池。
+    db_pool_min: int = 2
+    db_pool_max: int = 10
+
     # ── 大模型（DeepSeek）──
     deepseek_api_key: str  # 必填，来自 .env
     deepseek_base_url: str = "https://api.deepseek.com/v1"

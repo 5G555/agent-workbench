@@ -1,11 +1,8 @@
 """鉴权基础件：密码哈希与 JWT 签发/校验。
 
-与参考项目（EduAgent）的差异：
-  EduAgent 用 passlib + bcrypt，但 passlib 1.7.4 和 bcrypt>=4 有兼容坑
-  （它要读 bcrypt.__about__.__version__，bcrypt 4 删了这个属性，得打补丁）。
-  这里改用标准库 hashlib.scrypt：零额外依赖、不会随第三方版本变化而崩。
+用标准库 hashlib.scrypt：零额外依赖、不会随第三方版本变化而崩。
 
-JWT 用 PyJWT（项目已有），不用 python-jose。
+JWT 用 PyJWT。
 """
 
 from __future__ import annotations
