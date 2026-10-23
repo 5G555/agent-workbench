@@ -64,6 +64,11 @@ jobs:
           pip install ruff pyright pytest pytest-asyncio
 
       # 三项检查分开跑：哪一步红了一眼能看出来
+      # 以可编辑模式安装项目：agents/core/api 等顶层包注册进环境，
+      # 之后不管从哪个目录跑 pytest 都能导入
+      - name: Install project (editable)
+        run: pip install -e .
+
       - name: Lint (ruff)
         run: ruff check .
 

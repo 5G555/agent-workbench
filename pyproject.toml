@@ -1,3 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-workbench"
+version = "0.1.0"
+description = "Multi-agent QA & data platform"
+requires-python = ">=3.13"
+dependencies = []  # 运行时依赖见 requirements.txt（含 torch，不适合走打包）
+
+# 平铺布局：根目录下多个顶层包，用 find 自动发现
+[tool.setuptools.packages.find]
+include = ["agents*", "core*", "api*", "mcp_servers*", "scripts*"]
+namespaces = true  # scripts/ 这类没有 __init__.py 的目录也要收进来
+
 # Myagent · 仅存放工具配置；依赖请见 requirements.txt / requirements-dev.txt
 # （本文件不含 [project] 段，故不参与打包，pip install -e . 不适用）
 
