@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 建分析视图（幂等）：租户隔离下沉到视图里，分析 Agent 只能查这些
     try:
-        from agents.analyst.schema import ensure_views
+        from agents.ops.metrics.views import ensure_views
 
         await ensure_views()
     except Exception as exc:  # 视图建不出来也不该拦住整个应用

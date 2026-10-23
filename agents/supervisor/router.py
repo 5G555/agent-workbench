@@ -92,6 +92,27 @@ OPS_KEYWORDS = (
     "有哪些任务",
 )
 
+# 系统指标意图：问的是"系统自己跑得怎么样"（会话、命中率、采集量）
+METRICS_KEYWORDS = (
+    "会话数",
+    "消息数",
+    "命中率",
+    "满意度",
+    "点踩",
+    "点赞",
+    "反馈",
+    "多少会话",
+    "多少消息",
+    "多少个会话",
+    "多少条消息",
+    "任务数",
+    "采集量",
+    "增长率",
+    "活跃",
+    "用量",
+    "成本",
+)
+
 # 数据分析意图：问的是"多少个/占比/趋势/排名/分布"这类量化问题
 ANALYST_KEYWORDS = (
     "统计",
@@ -119,6 +140,17 @@ PRICE_HINTS = ("钱", "价格", "费用", "收费", "报价", "贵")
 CRAWL_DATA_HINTS = ("抓取到", "采集到", "抓到的", "爬取到", "采集的数据", "抓取的数据")
 
 URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\"']+")
+
+
+def is_metrics_intent(text: str) -> bool:
+    """是不是在问系统自身的运行指标（归运维的可观测性）。"""
+    lowered = (text or "").lower()
+    if not lowered:
+        return False
+    if detect_url(text) or mentions_crawl(text):
+        # 要抓数据、或问"抓到的数据"都不算系统指标
+        return False
+    return any(k in lowered for k in METRICS_KEYWORDS)
 
 
 def is_analyst_intent(text: str) -> bool:
@@ -175,7 +207,7 @@ def implies_crawl(text: str) -> bool:
 class RouteDecision(BaseModel):
     """路由结果。"""
 
-    agent: Literal["qa", "research", "crawler", "ops", "analyst"] = Field(default="qa")
+    agent: Literal["qa", "research", "crawler", "ops", "analyst", "metrics"] = Field(default="qa")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
@@ -243,6 +275,11 @@ async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
         logger.info("supervisor.routed", query=query, agent="ops", need_confirm=False)
         return resolved
 
+    if is_metrics_intent(query):
+        resolved = ResolvedRoute(agent="metrics", confidence=1.0, reason="系统指标关键词命中")
+        logger.info("supervisor.routed", query=query, agent="metrics", need_confirm=False)
+        return resolved
+
     if is_analyst_intent(query):
         resolved = ResolvedRoute(agent="analyst", confidence=1.0, reason="分析关键词命中")
         logger.info("supervisor.routed", query=query, agent="analyst", need_confirm=False)
@@ -289,7 +326,7 @@ async def _route_local(query: str) -> RouteDecision | None:
         return None
 
     return RouteDecision(
-        agent=cast(Literal["qa", "research", "crawler", "ops", "analyst"], agent),
+        agent=cast(Literal["qa", "research", "crawler", "ops", "analyst", "metrics"], agent),
         confidence=confidence,
         reason="本地意图模型",
     )

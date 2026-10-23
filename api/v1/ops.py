@@ -26,6 +26,7 @@ from agents.ops.cache_maintenance import list_backups, restore_backup
 from agents.ops.cache_maintenance import overview as cache_overview
 from agents.ops.cleaner import human_size, plan_cleanup, scan_exports
 from agents.ops.gateway import execute as gateway_execute
+from agents.ops.metrics.views import METRIC_CATALOG, VIEW_CATALOG
 from api.deps import get_current_user, rate_limit
 from core.logger import get_logger
 from core.users import get_user_store
@@ -376,4 +377,63 @@ async def audit_log(
     return {
         "stats": await store.stats(user["tenant_id"]),
         "items": await store.list_entries(user["tenant_id"], limit),
+    }
+
+
+# ── 系统指标（原 analyst 的 A 路径，现归运维可观测性）────────
+class MetricRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="自然语言指标问题")
+    session_id: str = Field(default="metrics", description="会话 ID")
+
+
+@router.post("/metrics/ask", summary="问系统指标（自然语言 → SQL）")
+async def metrics_ask(
+    request: MetricRequest,
+    user: dict[str, str] = Depends(get_current_user),
+    _: None = Depends(rate_limit),
+) -> dict[str, Any]:
+    from core.orchestrator import AgentRequest, AgentType, get_orchestrator
+
+    agent_request = AgentRequest(
+        user_id=user["user_id"],
+        tenant_id=user["tenant_id"],
+        session_id=request.session_id,
+        agent_type=AgentType.METRICS,
+        user_message=request.question,
+        context={
+            "department": user.get("department", "*"),
+            "role": user.get("role", "user"),
+        },
+    )
+    result = await get_orchestrator().handle(agent_request)
+    structured = result.structured or {}
+    return {
+        "success": result.success,
+        "answer": result.content,
+        "mode": str(structured.get("answer_mode") or ""),
+        "sql": str(structured.get("sql") or ""),
+        "columns": [str(c) for c in (structured.get("columns") or [])],
+        "rows": [r for r in (structured.get("rows") or []) if isinstance(r, dict)],
+        "row_count": int(structured.get("row_count") or 0),
+        "error_msg": result.error_msg,
+    }
+
+
+@router.get("/metrics/catalog", summary="可查的系统指标与视图")
+async def metrics_catalog(
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {
+        "views": [
+            {
+                "name": name,
+                "desc": str(meta["desc"]),
+                "columns": [str(c) for c in meta["columns"]],  # type: ignore[union-attr]
+            }
+            for name, meta in VIEW_CATALOG.items()
+        ],
+        "metrics": [
+            {"name": name, "note": meta["note"], "sql": meta["sql"]}
+            for name, meta in METRIC_CATALOG.items()
+        ],
     }

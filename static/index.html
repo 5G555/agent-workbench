@@ -382,6 +382,18 @@
 
   <div class="opsview">
     <section class="opscard">
+      <h3>系统指标 <span id="metricSummary" class="hint" style="opacity:.6">（自然语言问，后台转 SQL）</span></h3>
+      <div class="inputbar">
+        <input id="metricInput" placeholder="例如：一共有多少会话 / FAQ 命中率是多少" />
+        <button class="send" id="metricSend">查询</button>
+      </div>
+      <div class="chips" id="metricChips"></div>
+      <div id="metricAnswer" class="hint" style="margin-top:10px;white-space:pre-wrap;opacity:.92"></div>
+      <pre id="metricSql" class="sqlbox" style="display:none"></pre>
+      <div id="metricTable"></div>
+    </section>
+
+    <section class="opscard">
       <h3>Redis 缓存</h3>
       <div class="statgrid" id="cacheStats">
         <div>版本<b id="cVer">-</b></div>
@@ -1297,6 +1309,7 @@ async function loadOps() {
     document.getElementById("opsMeta").textContent =
       `缓存 v${cacheRes.version || "-"} · 导出 ${exportRes.count} · 回收站 ${trashRes.count}`;
 
+    loadMetricCatalog();
     await loadAudit();
     await loadApprovals();
   } catch (e) {
@@ -1310,31 +1323,33 @@ async function loadOps() {
 // ══════════════════════════════════════════════════════
 // 分析分区：自然语言提问 → 结论 + 实际执行的 SQL + 结果表
 // ══════════════════════════════════════════════════════
-async function loadAnalystCatalog() {
-  try {
-    const data = await apiFetch("/api/v1/analyst/catalog").then((r) => r.json());
-    const chips = document.getElementById("anaChips");
-    chips.innerHTML = "";
-    (data.metrics || []).forEach((m) => {
-      const btn = document.createElement("button");
-      btn.textContent = m.name;
-      btn.title = m.note || m.sql;
-      btn.onclick = () => {
-        document.getElementById("anaInput").value = `${m.name}是多少`;
-        runAnalyze();
-      };
-      chips.appendChild(btn);
-    });
+const ANALYST_EXAMPLES = [
+  "抓取到的数据里作者分布如何，画个柱状图",
+  "抓到的数据里标签出现次数排前 5 的",
+  "这批数据里哪个字段取值最集中",
+  "抓到的数据按字段做个统计摘要",
+];
 
-    const box = document.getElementById("anaCatalogBox");
-    box.innerHTML =
-      "<b>可用视图（已按租户隔离）</b><br>" +
-      (data.views || [])
-        .map((v) => `· <code>${esc(v.name)}</code> — ${esc(v.desc)}`)
-        .join("<br>");
-  } catch (e) {
-    showToast("加载数据字典失败：" + e.message, true);
-  }
+function loadAnalystCatalog() {
+  // 分析分区只处理"已抓到的数据"，所以示例是固定的，
+  // 不需要像系统指标那样从后端拉指标字典
+  const chips = document.getElementById("anaChips");
+  chips.innerHTML = "";
+  ANALYST_EXAMPLES.forEach((text) => {
+    const btn = document.createElement("button");
+    btn.textContent = text.length > 16 ? text.slice(0, 16) + "…" : text;
+    btn.title = text;
+    btn.onclick = () => {
+      document.getElementById("anaInput").value = text;
+      runAnalyze();
+    };
+    chips.appendChild(btn);
+  });
+
+  document.getElementById("anaCatalogBox").innerHTML =
+    "<b>分析对象</b>：最近一次采集任务的结构化记录<br>" +
+    "· 需要先有数据：去 🕷️ 爬虫分区抓一轮<br>" +
+    "· 分析过程在沙箱里跑 pandas，只做计算与绘图";
 }
 
 function renderAnaTable(columns, rows) {
@@ -1437,6 +1452,77 @@ document.getElementById("menuBtn4").onclick = () => {
   document.getElementById("backdrop").classList.add("show");
   document.querySelector("aside").classList.add("show");
 };
+
+// ── 系统指标（原 analyst 的 SQL 路径，现归运维）──────────────
+async function loadMetricCatalog() {
+  try {
+    const data = await apiFetch("/api/v1/ops/metrics/catalog").then((r) => r.json());
+    const chips = document.getElementById("metricChips");
+    chips.innerHTML = "";
+    (data.metrics || []).forEach((m) => {
+      const btn = document.createElement("button");
+      btn.textContent = m.name;
+      btn.title = m.note || m.sql;
+      btn.onclick = () => {
+        document.getElementById("metricInput").value = `${m.name}是多少`;
+        runMetricAsk();
+      };
+      chips.appendChild(btn);
+    });
+  } catch (e) {
+    showToast("加载指标字典失败：" + e.message, true);
+  }
+}
+
+function renderMetricTable(columns, rows) {
+  const target = document.getElementById("metricTable");
+  if (!columns || !columns.length) {
+    target.innerHTML = "";
+    return;
+  }
+  const head = columns.map((c) => `<th>${esc(c)}</th>`).join("");
+  const body = rows
+    .slice(0, 30)
+    .map((row) => `<tr>${columns.map((c) => `<td>${esc(row[c] ?? "")}</td>`).join("")}</tr>`)
+    .join("");
+  target.innerHTML = `<table class="opstable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function runMetricAsk() {
+  const input = document.getElementById("metricInput");
+  const question = input.value.trim();
+  if (!question) return;
+
+  const btn = document.getElementById("metricSend");
+  btn.disabled = true;
+  btn.textContent = "查询中…";
+  const answerBox = document.getElementById("metricAnswer");
+  answerBox.textContent = "正在取数…";
+
+  try {
+    const data = await apiFetch("/api/v1/ops/metrics/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    }).then((r) => r.json());
+
+    answerBox.textContent = data.answer || data.error_msg || "（无输出）";
+    const sqlBox = document.getElementById("metricSql");
+    if (data.sql) {
+      sqlBox.style.display = "";
+      sqlBox.textContent = data.sql;
+      renderMetricTable(data.columns || [], data.rows || []);
+    } else {
+      sqlBox.style.display = "none";
+      document.getElementById("metricTable").innerHTML = "";
+    }
+  } catch (e) {
+    answerBox.textContent = "查询失败：" + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "查询";
+  }
+}
 
 // ── 审批收件箱 ──────────────────────────────────────────────
 // 管理员看别人提的申请；普通用户看自己提的（等批准后重试）。
@@ -1866,6 +1952,10 @@ async function askOps() {
 }
 
 document.getElementById("opsRefresh").onclick = loadOps;
+document.getElementById("metricSend").onclick = runMetricAsk;
+document.getElementById("metricInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runMetricAsk();
+});
 document.getElementById("cacheRestore").onclick = restoreCacheBackup;
 document.getElementById("purgePreview").onclick = () => purgeTrash(false);
 document.getElementById("purgeApply").onclick = () => purgeTrash(true);

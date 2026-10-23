@@ -35,7 +35,8 @@ class AgentType(StrEnum):
     RESEARCH = "research"  # 联网研究（MCP 工具 + 多步检索）
     CRAWLER = "crawler"  # 网页采集（抓正文落库，供数据分析使用）
     OPS = "ops"  # 运维（通过 MCP 工具查任务 / 导出 / 清理）
-    ANALYST = "analyst"  # 数据分析（Text2SQL / MCP 探索 / 串联）
+    ANALYST = "analyst"  # 数据分析（采集数据 + pandas + 绘图）
+    METRICS = "metrics"  # 系统指标（SQL 视图，运维可观测性的一部分）
 
 
 class AgentRequest(BaseModel):
@@ -132,6 +133,11 @@ class Orchestrator:
                 from agents.analyst.graph import build_analyst_graph
 
                 self._agent_graphs[agent_type] = build_analyst_graph()
+
+            elif agent_type == AgentType.METRICS:
+                from agents.ops.metrics.graph import build_metrics_graph
+
+                self._agent_graphs[agent_type] = build_metrics_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")
@@ -324,6 +330,7 @@ class Orchestrator:
             # 显式带上本轮问题：checkpointer 会恢复上一轮的 original_query，
             # 不覆盖就会拿旧问题去查缓存/检索
             "original_query": request.user_message,
+            "question": request.user_message,
             # 爬虫 Agent 的输入：抓什么、抓几个、是否指定 URL
             "query": request.user_message,
             "entry_url": request.context.get("entry_url") or "",

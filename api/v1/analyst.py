@@ -12,7 +12,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from agents.analyst.schema import METRIC_CATALOG, VIEW_CATALOG
 from api.deps import get_current_user, rate_limit
 from core.logger import get_logger
 from core.orchestrator import AgentRequest, AgentResponse, AgentType, get_orchestrator
@@ -85,22 +84,3 @@ async def ask(
         prep=structured.get("prep") or {},
         error_msg=result.error_msg,
     )
-
-
-@router.get("/catalog", summary="可分析的数据与指标")
-async def catalog(user: dict[str, str] = Depends(get_current_user)) -> dict[str, Any]:
-    """面板里展示"能问什么"：视图清单 + 常用指标（带示例 SQL）。"""
-    return {
-        "views": [
-            {
-                "name": name,
-                "desc": str(meta["desc"]),
-                "columns": [str(c) for c in meta["columns"]],  # type: ignore[union-attr]
-            }
-            for name, meta in VIEW_CATALOG.items()
-        ],
-        "metrics": [
-            {"name": name, "note": meta["note"], "sql": meta["sql"]}
-            for name, meta in METRIC_CATALOG.items()
-        ],
-    }
