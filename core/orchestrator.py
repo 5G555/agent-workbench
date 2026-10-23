@@ -331,9 +331,16 @@ class Orchestrator:
             · 没有任何来源
             · 答案里出现"没有找到 / 未找到 / 无法回答 / 没有相关资料"
         """
-        sources = research_state.get("sources") or []
-        markers = ("没有找到", "未找到", "无法回答", "没有相关资料", "没有直接")
-        empty = not sources or any(marker in research_answer for marker in markers)
+        # 只认"检索结果本身为空"，不能因为答案里出现"没有找到"就判空——
+        # 模型可能带着来源说"没有找到确切价格"，那种答案是有依据的，不能丢
+        sources = (
+            research_state.get("sources")
+            or research_state.get("citations")
+            or research_state.get("search_results")
+            or []
+        )
+        status = str(research_state.get("search_status") or "")
+        empty = not sources or status in {"failed", "empty"}
         if not empty:
             return None
 
