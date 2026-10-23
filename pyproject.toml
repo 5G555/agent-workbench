@@ -22,6 +22,8 @@ ignore = [
 "api/**" = ["B008", "S105"]
 
 [tool.pytest.ini_options]
+# 让 pytest（而不是 python -m pytest）也能导入 agents/core 等本地包
+pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --strict-config"

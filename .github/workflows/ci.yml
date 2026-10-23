@@ -69,4 +69,4 @@ jobs:
         run: pyright
 
       - name: Tests (pytest)
-        run: pytest -q
+        run: python -m pytest -q
