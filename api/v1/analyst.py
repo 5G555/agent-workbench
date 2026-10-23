@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -95,3 +96,113 @@ async def ask(
         cached=bool(structured.get("cached")),
         error_msg=result.error_msg,
     )
+
+
+# ── 手动分析：用户指定任务/字段/聚合/图表 ──────────────────
+class ManualRequest(BaseModel):
+    """手动分析的参数（不含自然语言）。"""
+
+    task_ids: list[int] = Field(..., min_length=1, description="分析哪些采集任务")
+    metrics: list[str] = Field(..., min_length=1, description="要统计的数值列")
+    agg: str = Field(default="mean", description="mean/sum/count/min/max/median/std")
+    group_by: str = Field(default="", description="按哪列分组，空表示整体")
+    x_field: str = Field(default="", description="折线/散点的横轴")
+    chart_type: str = Field(default="bar", description="none/bar/line/scatter/pie/hist/candlestick")
+    title: str = Field(default="", description="图表标题")
+
+
+async def _load_records(task_ids: list[int], tenant_id: str) -> list[dict]:
+    """按租户取采集记录（与 analyst 图取数口径一致：带 task_id 列）。"""
+    from core.db import lease_connection
+
+    conn = await lease_connection()
+    try:
+        rows = await conn.fetch(
+            "SELECT r.task_id, r.data FROM crawl_records r "
+            "JOIN crawl_tasks t ON t.id = r.task_id "
+            "WHERE t.tenant_id = $1 AND r.task_id = ANY($2::bigint[]) "
+            "ORDER BY r.task_id, r.id LIMIT 2000",
+            tenant_id,
+            task_ids,
+        )
+    finally:
+        await conn.close()
+    # data 列是 JSON 文本，需要先解析；解析失败的记录跳过
+    items: list[dict] = []
+    for row in rows:
+        raw = row["data"]
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict):
+            items.append({**payload, "task_id": int(row["task_id"])})
+    return items
+
+
+@router.get("/fields", summary="某个任务的可用字段（按用途分组）")
+async def fields(
+    task_id: int,
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    from agents.analyst.frame import build_frame
+    from agents.analyst.manual import column_roles
+
+    records = await _load_records([task_id], user["tenant_id"])
+    frame, report = build_frame([{"data": item} for item in records])
+    return {
+        "task_id": task_id,
+        "rows": report.rows,
+        "roles": column_roles(frame),
+        "columns": [str(c) for c in frame.columns],
+    }
+
+
+@router.post("/manual", summary="手动分析（代码按模板生成，口径确定）")
+async def manual(
+    request: ManualRequest,
+    user: dict[str, str] = Depends(get_current_user),
+    _: None = Depends(rate_limit),
+) -> dict[str, Any]:
+    from agents.analyst.code_runner import run_code
+    from agents.analyst.frame import build_frame, frame_overview
+    from agents.analyst.manual import ManualSpec, build_code
+
+    records = await _load_records(request.task_ids, user["tenant_id"])
+    if not records:
+        return {"success": False, "answer": "这些任务没有可用记录。", "mode": "manual"}
+
+    frame, report = build_frame([{"data": item} for item in records])
+    columns = [str(c) for c in frame.columns]
+
+    spec = ManualSpec(
+        metrics=request.metrics,
+        agg=request.agg,
+        group_by=request.group_by,
+        x_field=request.x_field,
+        chart_type=request.chart_type,
+        title=request.title,
+    )
+    try:
+        code = build_code(spec, columns)
+    except ValueError as exc:
+        return {"success": False, "answer": str(exc), "mode": "manual"}
+
+    result = await run_code(code=code, frame=frame)
+    return {
+        "success": result.ok,
+        "mode": "manual",
+        "answer": (
+            f"按【{request.agg}】统计 {', '.join(request.metrics)}"
+            + (f"，按 {request.group_by} 分组" if request.group_by else "")
+            + ("，已完成。" if result.ok else f"，执行失败：{result.error}")
+        ),
+        "code": code,
+        "stdout": result.stdout,
+        "figures": result.figures,
+        "rows": result.result,
+        "prep": report.as_dict(),
+        "overview": frame_overview(frame),
+        "chart_type": request.chart_type,
+        "error_msg": result.error or None,
+    }

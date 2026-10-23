@@ -516,6 +516,39 @@
       <div id="anaAnswer" class="markdown-body"></div>
     </section>
 
+    <section class="opscard">
+      <h3>手动模式 <span class="hint" style="opacity:.6">（自己定口径，代码按模板生成）</span></h3>
+      <div class="tools">
+        <input id="anaManualTasks" placeholder="任务号，如 9 或 9,10" style="width:170px" />
+        <button id="anaLoadFields">加载字段</button>
+        <span id="anaFieldHint" class="hint" style="opacity:.6;align-self:center"></span>
+      </div>
+      <div class="tools" style="margin-top:8px">
+        <select id="anaMetrics" multiple size="5" style="min-width:200px"></select>
+        <select id="anaAgg">
+          <option value="mean">均值</option>
+          <option value="sum">求和</option>
+          <option value="count">计数</option>
+          <option value="min">最小</option>
+          <option value="max">最大</option>
+          <option value="median">中位数</option>
+          <option value="std">标准差</option>
+        </select>
+        <select id="anaGroupBy"><option value="">（不分组）</option></select>
+        <select id="anaXField"><option value="">（横轴自动）</option></select>
+        <select id="anaChart">
+          <option value="line">折线图</option>
+          <option value="bar">柱状图</option>
+          <option value="scatter">散点图</option>
+          <option value="pie">饼图</option>
+          <option value="hist">直方图</option>
+          <option value="candlestick">K 线图</option>
+          <option value="none">不画图</option>
+        </select>
+        <button class="primary" id="anaManualRun">按口径分析</button>
+      </div>
+    </section>
+
     <section class="opscard" id="anaChartCard" style="display:none">
       <h3>图表 <span id="anaChartCount" class="hint" style="opacity:.6"></span></h3>
       <div id="anaCharts" class="charts"></div>
@@ -1499,6 +1532,99 @@ document.getElementById("menuBtn4").onclick = () => {
   document.getElementById("backdrop").classList.add("show");
   document.querySelector("aside").classList.add("show");
 };
+
+// ── 手动模式：自己选字段/聚合/图表 ─────────────────────────
+function fillSelect(el, items, placeholder) {
+  el.innerHTML = placeholder ? `<option value="">${placeholder}</option>` : "";
+  items.forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = item;
+    opt.textContent = item;
+    el.appendChild(opt);
+  });
+}
+
+async function loadAnaFields() {
+  const raw = (document.getElementById("anaManualTasks").value || "").trim();
+  const ids = raw.split(/[,，\s]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0);
+  if (!ids.length) {
+    showToast("先填任务号，例如 9", true);
+    return;
+  }
+  try {
+    const data = await apiFetch(`/api/v1/analyst/fields?task_id=${ids[0]}`).then((r) => r.json());
+    const roles = data.roles || {};
+    fillSelect(document.getElementById("anaMetrics"), roles.numeric || [], "");
+    fillSelect(document.getElementById("anaGroupBy"), roles.categorical || [], "（不分组）");
+    fillSelect(
+      document.getElementById("anaXField"),
+      [...(roles.datetime || []), ...(roles.numeric || [])],
+      "（横轴自动）"
+    );
+    document.getElementById("anaFieldHint").textContent =
+      `${data.rows} 行 / 数值 ${(roles.numeric || []).length} 列 / 时间 ${(roles.datetime || []).length} 列`;
+  } catch (e) {
+    showToast("加载字段失败：" + e.message, true);
+  }
+}
+
+async function runAnaManual() {
+  const raw = (document.getElementById("anaManualTasks").value || "").trim();
+  const taskIds = raw.split(/[,，\s]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0);
+  const metrics = [...document.getElementById("anaMetrics").selectedOptions].map((o) => o.value);
+  if (!taskIds.length) return showToast("先填任务号", true);
+  if (!metrics.length) return showToast("至少选一个字段", true);
+
+  const btn = document.getElementById("anaManualRun");
+  btn.disabled = true;
+  btn.textContent = "执行中…";
+  try {
+    const data = await apiFetch("/api/v1/analyst/manual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task_ids: taskIds,
+        metrics,
+        agg: document.getElementById("anaAgg").value,
+        group_by: document.getElementById("anaGroupBy").value,
+        x_field: document.getElementById("anaXField").value,
+        chart_type: document.getElementById("anaChart").value,
+        title: "",
+      }),
+    }).then((r) => r.json());
+
+    document.getElementById("anaResultCard").style.display = "";
+    document.getElementById("anaAnswer").innerHTML = renderMarkdown(
+      data.answer || data.error_msg || "（无输出）"
+    );
+    document.getElementById("anaBadge").textContent = `（手动模式 / ${data.chart_type || ""}）`;
+
+    const figs = data.figures || [];
+    if (figs.length) {
+      document.getElementById("anaChartCard").style.display = "";
+      document.getElementById("anaChartCount").textContent = `（${figs.length} 张）`;
+      document.getElementById("anaCharts").innerHTML = figs
+        .map((b64) => `<img alt="分析图表" src="data:image/png;base64,${b64}" />`)
+        .join("");
+    }
+
+    if (data.code) {
+      document.getElementById("anaSqlCard").style.display = "";
+      document.getElementById("anaCodeTitle").firstChild.textContent = "生成的 pandas 代码 ";
+      document.getElementById("anaSql").textContent =
+        `${data.code}\n\n--- 程序输出 ---\n${data.stdout || "（无输出）"}`;
+      document.getElementById("anaTable").innerHTML = "";
+    }
+  } catch (e) {
+    showToast("执行失败：" + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "按口径分析";
+  }
+}
+
+document.getElementById("anaLoadFields").onclick = loadAnaFields;
+document.getElementById("anaManualRun").onclick = runAnaManual;
 
 // ── 系统指标（原 analyst 的 SQL 路径，现归运维）──────────────
 async function loadMetricCatalog() {
