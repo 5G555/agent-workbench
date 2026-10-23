@@ -113,20 +113,22 @@ class ManualRequest(BaseModel):
 
 async def _load_records(task_ids: list[int], tenant_id: str) -> list[dict]:
     """按租户取采集记录（与 analyst 图取数口径一致：带 task_id 列）。"""
-    from core.db import lease_connection
+    from sqlalchemy import text
 
-    conn = await lease_connection()
-    try:
-        rows = await conn.fetch(
-            "SELECT r.task_id, r.data FROM crawl_records r "
-            "JOIN crawl_tasks t ON t.id = r.task_id "
-            "WHERE t.tenant_id = $1 AND r.task_id = ANY($2::bigint[]) "
-            "ORDER BY r.task_id, r.id LIMIT 2000",
-            tenant_id,
-            task_ids,
+    from core.db_sqlalchemy import session_scope
+
+    # 新代码统一走 SQLAlchemy 会话：退出即归还，不会漏还连接
+    async with session_scope() as session:
+        result = await session.execute(
+            text(
+                "SELECT r.task_id, r.data FROM crawl_records r "
+                "JOIN crawl_tasks t ON t.id = r.task_id "
+                "WHERE t.tenant_id = :tenant AND r.task_id = ANY(:ids) "
+                "ORDER BY r.task_id, r.id LIMIT 2000"
+            ),
+            {"tenant": tenant_id, "ids": task_ids},
         )
-    finally:
-        await conn.close()
+        rows = result.mappings().all()
     # data 列是 JSON 文本，需要先解析；解析失败的记录跳过
     items: list[dict] = []
     for row in rows:

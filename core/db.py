@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import asyncpg
 from asyncpg.pool import PoolConnectionProxy
@@ -65,14 +66,29 @@ async def close_pool() -> None:
         logger.info("db.pool_closed")
 
 
+# 借出中的连接：id(LeasedConnection) -> 借出时刻（monotonic）
+_active_leases: dict[int, float] = {}
+LEASE_WARN_SECONDS = 30.0
+
+
 def pool_stats() -> dict[str, int]:
+    """当前池的使用情况，排查连接泄漏时用。
+
+    active/long_held 直接回答有没有泄漏：
+    借出超过 30 秒还没归还的连接会计进 long_held 并打警告。
+    """
     """当前池的使用情况，排查"连接泄漏"时用。"""
     if _pool is None:
         return {"size": 0, "free": 0, "used": 0}
+    now = time.monotonic()
     return {
         "size": _pool.get_size(),
         "free": _pool.get_idle_size(),
         "used": _pool.get_size() - _pool.get_idle_size(),
+        "active": len(_active_leases),
+        "long_held": sum(
+            1 for start in _active_leases.values() if now - start > LEASE_WARN_SECONDS
+        ),
     }
 
 
@@ -87,11 +103,13 @@ class LeasedConnection:
     包一层后，`.close()` 变成归还，调用点一行都不用改，也不会漏还。
     """
 
-    __slots__ = ("_conn", "_pool")
+    __slots__ = ("_acquired_at", "_conn", "_pool")
 
     def __init__(self, conn: PoolConnectionProxy, pool: asyncpg.Pool) -> None:
         self._conn: PoolConnectionProxy | None = conn
         self._pool = pool
+        self._acquired_at = time.monotonic()
+        _active_leases[id(self)] = self._acquired_at
 
     def __getattr__(self, name: str):
         return getattr(self._conn, name)
@@ -102,6 +120,9 @@ class LeasedConnection:
         if conn is None:
             return
         self._conn = None
+        held = time.monotonic() - _active_leases.pop(id(self), time.monotonic())
+        if held > LEASE_WARN_SECONDS:
+            logger.warning("db.lease_long_held", seconds=round(held, 1))
         await pool.release(conn)
 
 
