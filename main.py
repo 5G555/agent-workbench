@@ -83,9 +83,15 @@ async def index() -> FileResponse:
 @app.get("/health", summary="健康检查", tags=["ops"])
 async def health() -> dict[str, Any]:
     settings = get_settings()
+    # 两个池都报：池打满时能立刻看出来，而不是表现为"请求卡住"
+    from core.db import pool_stats
+    from core.db_sqlalchemy import sqlalchemy_pool_stats
+
     return {
         "status": "ok",
         "env": settings.app_env,
         "milvus": f"{settings.milvus_host}:{settings.milvus_port}",
         "cache_enabled": settings.cache_enabled,
+        "pg_pool": pool_stats(),
+        "sqlalchemy_pool": sqlalchemy_pool_stats(),
     }
