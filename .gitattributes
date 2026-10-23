@@ -1,0 +1,19 @@
+# 统一换行符：仓库内一律 LF，避免 Windows / Linux 出现整文件 diff
+* text=auto eol=lf
+
+# 明确二进制，别让 git 尝试文本转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.pdf binary
+*.whl binary
+*.zip binary
+
+# 这些文件在 Windows 上本来就用 CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 语言统计：文档与静态资源不计入主语言
+*.md linguist-documentation
+static/* linguist-vendored

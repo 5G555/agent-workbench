@@ -1,317 +1,179 @@
-# Myagent
+# Myagent — 多 Agent 智能问答与数据平台
 
-AI Agent 项目骨架。环境与依赖已就绪，业务代码从零开始写。
+一个可运行的多 Agent 系统：内部知识问答、联网研究、网页采集、数据分析、运维操作
+由一个路由层统一分派，全部走同一套权限、缓存与审计。
 
-## 环境
+不是"一个聊天框套一层检索"，而是**六个可执行 Agent + 三层护栏**：
 
-| 项 | 值 |
-|---|---|
-| 项目路径 | `D:\AI实战\Myagent` |
-| conda 环境 | `my-agent`（Python 3.13.15，位于 C 盘） |
-| 环境位置 | `C:\Users\Administrator\anaconda3\envs\my-agent` |
-| 依赖管理 | pip，声明在 `requirements.txt` / `requirements-dev.txt` |
+- 路由层决定"这件事该谁做"，并保证**不需要检索的问题不触发检索**
+- 每个 Agent 有独立的图（LangGraph），可单独测试、可替换
+- 破坏性操作必须经过策略 → 审批 → 快照 → 审计，失败自动回滚
 
-> 该环境与 `C:\AI-Projects\my-agent` 共用同一套包。**两个项目只要依赖一致就没问题**；一旦 `Myagent` 需要额外的包（比如 torch、pgvector），建议 `conda create -n myagent python=3.13` 单独开一个，避免互相污染。
+## 能力一览
+
+| 入口 | Agent | 能做什么 |
+|---|---|---|
+| 💬 对话 | `qa` | 产品/业务问题：FAQ 精确匹配 + 向量检索 + 精排，答不出自动升级联网 |
+| 💬 对话 | `research` | 联网研究，答案带来源编号 |
+| 💬 对话 | `direct` | 方法/写作/解释类问题直接回答，不检索 |
+| 💬 对话 | `help` | "你能做什么"——基于真实能力清单与当前数据作答 |
+| 🕷️ 爬虫 | `crawler` | 抓正文、抽表格/列表/段落，落库、导出文件 |
+| 📊 分析 | `analyst` | 对采集数据做 pandas 计算与绘图（含手动模式：自己定口径） |
+| 🛠️ 运维 | `ops` | 采集任务、导出清理、缓存清理、回收站、审批与审计 |
+| 🛠️ 运维 | `metrics` | 用自然语言问系统指标（自动转 SQL，只读视图） |
+
+## 架构
+
+```
+                      ┌────────────── 路由层 ──────────────┐
+用户提问 ──▶ 闸门（确定性）──▶ 证据判定 ──▶ 模型（灰度区）──▶ direct 兜底
+             │ 能力/私有/URL/破坏性/指标/采集分析
+             ▼
+      ┌─────────────── Agent 层（LangGraph）───────────────┐
+      │  qa   research   crawler   analyst   ops   metrics │
+      └───────────────────────┬───────────────────────────┘
+                              ▼
+      数据层：Postgres（业务/审计） · Milvus（向量） · Redis（缓存）
+      外部：MCP 服务（web_search / ops 工具）
+```
+
+### 三个值得说明的设计
+
+**1. 路由是闸门 + 证据判定，不是分类器**
+
+本地 BERT 三分类曾把"你可以做什么"判成 `research`（置信度 1.00），联网搜回一堆
+无关内容。现在的顺序是：
+
+```
+能力自述 → 私有资料 → URL采集 → 破坏性动作 → 系统指标 → 采集分析
+        → 证据 must（要实时事实）→ 证据 never（方法/生成）→ 模型判灰区
+```
+
+闸门用规则锁死明确情况；灰区交给模型，但**置信度低于阈值就回 direct**（误检索的
+代价远大于误直接回答）。`help` / `direct` 两条路径有静态断言保证不引用任何检索组件。
+
+**2. 检索范围由视图/ACL 强制，不靠提示词**
+
+分析视图（`ana_*`）里写死 `current_setting('app.tenant_id')`，未设置时返回 0 行；
+向量检索走 `RetrievalScope(tenant, department, role)` 拼 filter 表达式。
+模型忘写租户条件也拿不到别家数据。
+
+**3. 破坏性操作是"网关"而不是"函数调用"**
+
+```
+策略判定 → 幂等 → 审批票据 → 预算 → 快照 → 意图审计 → 执行 → 校验 → 回滚/结果审计
+```
+
+备份失败就一个都不删（Fail-Closed）；审批票据绑定 `sha256(tool|args|tenant)`，
+换参数重放无效；回收站保留 7 天。
 
 ## 快速开始
 
-```powershell
-# 开一个新窗口（旧窗口不认新 profile）
+### 1. 起基础设施（Postgres / Milvus / etcd / MinIO / Redis）
+
+```bash
+docker compose up -d
+docker ps --filter name=myagent        # 四个容器应为 healthy
+```
+
+### 2. 装依赖
+
+```bash
+conda create -n my-agent python=3.13 -y
 conda activate my-agent
-cd D:\AI实战\Myagent
-
-# 依赖已装好，这一步可跳过；换机时才需要
-python -m pip install -r requirements-dev.txt
-
-# 自检
-pytest
-ruff check .
-pyright
-
-# 配置密钥
-Copy-Item .env.example .env
-notepad .env
+pip install -r requirements.txt
 ```
 
-不激活也能跑：
+### 3. 配置 `.env`
 
-```powershell
-& "C:\Users\Administrator\anaconda3\envs\my-agent\python.exe" -m pytest
+最少需要这三项（其余有默认值）：
+
+```ini
+DB_PASSWORD=你的数据库密码
+DEEPSEEK_API_KEY=你的 DeepSeek Key
+JWT_SECRET_KEY=随机长字符串
 ```
 
-## 文件说明
+模型路径需指向本地权重（BGE-M3 与 reranker，约 4.3 GB，**不在仓库里**）：
 
-| 文件 | 作用 |
-|---|---|
-| `requirements.txt` | 运行时依赖（Web、LLM SDK、LangGraph、MCP、存储、追踪） |
-| `requirements-dev.txt` | `-r requirements.txt` + pytest / ruff / pyright / ipython |
-| `requirements.lock.txt` | 精确版本快照（114 行），换机复现：`pip install -r requirements.lock.txt` |
-| `pyproject.toml` | 仅工具配置（ruff / pytest / pyright），不参与打包 |
-| `.env.example` | 环境变量模板 → 复制成 `.env` |
-| `app/__init__.py` | 包骨架，空文件 |
-| `tests/test_env.py` | 5 项环境自检：版本、导入、Pydantic v2、异步 |
+```ini
+bge_m3_model_path=D:/AI-Models/bge-m3
+reranker_model_path=D:/AI-Models/reranker/bge-reranker-large
+```
 
-## 已装版本（2026-10-21）
+### 4. 建表 + 起服务
 
-| 包 | 版本 | 包 | 版本 |
-|---|---|---|---|
-| fastapi | 0.156.8 | langgraph | 1.2.16 |
-| uvicorn | 0.54.0 | langchain-core | 1.6.12 |
-| pydantic | 2.14.1 | mcp | 1.30.0 |
-| openai | 3.35.1 | langfuse | 5.0.4 |
-| anthropic | 1.17.0 | sqlalchemy | 2.1.5 |
-| httpx | 0.28.1 | pytest | 9.1.1 |
-| ruff | 0.17.1 | pyright | 1.1.414 |
+```bash
+alembic upgrade head                     # 空库可重建（已验证 19 表 8 视图）
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+python -m mcp_servers.web_search_server  # :8765
+python -m mcp_servers.ops_server         # :8766
+```
 
-## 依赖选型要点
-
-- **`mcp>=1.2,<2`**：MCP 2.0 是破坏性升级（`FastMCP` → `MCPServer`、wire type 改 snake_case、`httpx` → `httpx2`）。确认需要 2.0 特性后再放开上限。
-- **`langfuse` 5.x**：别照抄 2.x 教程，用 `from langfuse import observe, get_client`。
-- **`openai` 3.x 依赖 `httpx2`**：`httpx` 与 `httpx2` 并存是上游设计，不是冲突。
-- **没装 `torch`**：本骨架不含本地推理，需要 BGE 嵌入时再装（cp313 轮子齐全）。
+打开 http://127.0.0.1:8000 即可（首次使用需先导入 FAQ 与文档，见 `scripts/`）。
 
 ## 目录结构
 
 ```
-Myagent/
-├─ config.py             # 唯一配置中心
-├─ main.py               # FastAPI 入口
-├─ core/                 # 与业务无关的基础设施
-│  ├─ state.py           #   主图状态契约 SupervisorState
-│  ├─ orchestrator.py    #   编排器（决策 + 路由 + 聚合）
-│  ├─ db / logger / retry / security / trace / streaming
-│  └─ users / token_store / exceptions / llm_factory
-├─ agents/               # 每个领域一个包
-│  ├─ supervisor/        #   意图路由（本地 BERT + 大模型兜底）
-│  ├─ qa/                #   内部知识库（faq / cache / retrieval）
-│  ├─ research/          #   联网研究（MCP 客户端、web 配额）
-│  ├─ crawler/           #   网页采集（工具层 / 存储层 / 处理 Agent）
-│  └─ ops/               #   运维：策略、执行网关、审批、回收站、清理、缓存巡检
-├─ api/v1/               # 各领域的 HTTP 接口
-├─ mcp_servers/          # 对模型暴露的工具（web_search / ops）
-└─ tests/
+agents/           按领域分包，每个 Agent 自带 graph/nodes/state
+  qa/             FAQ、检索、缓存、答案合成
+  research/       规划、检索、证据、时间过滤
+  crawler/        抓取、抽取、落库、导出
+  analyst/        预处理、沙箱执行、图表类型、手动模式
+  ops/            策略、网关、审批、审计、回收站、缓存巡检
+    metrics/      系统指标（SQL 视图 + 守卫）
+  direct/ help/   不检索的两条路径
+  supervisor/     路由（闸门 + 证据判定 + 反馈回路）
+core/             与业务无关：db、日志、重试、安全、编排、追踪
+api/v1/           HTTP 接口（auth / ask / qa / research / crawler / ops / analyst）
+mcp_servers/      对模型暴露的工具（web_search / ops）
+migrations/       Alembic（baseline 由 pg_dump 生成）
+scripts/          导入、评估、导出、清理
+static/           单文件前端（四个分区）
+tests/            332 条测试
 ```
 
-两条约定：
+## 开发
 
-1. **`core/` 只放与领域无关的东西**。某个模块只被一个领域用时，它就该在那个领域的包里
-   （例如缓存巡检属于 ops，不属于 core）。
-2. **安全护栏属于运维领域**。策略/审批/网关/回收站目前只服务于运维动作；
-   等第二个领域也要"删东西"时，再把网关提到 core——那时抽象才有第二个使用者。
-
-## 常用命令
-
-```powershell
-pytest                    # asyncio_mode=auto，异步用例无需 marker
-pytest --cov=core         # 覆盖率
-ruff check . --fix
-ruff format .
-pyright
+```bash
+pip install -r requirements-dev.txt   # ruff / pyright / pytest
+ruff check .          # 代码规范
+pyright               # 类型检查
+pytest -q             # 332 passed
+python -m scripts.eval_route          # 路由评测：41 条，分类目匹配度
 ```
 
-## 两个 Agent 与 MCP
+CI（GitHub Actions）会跑这三项，见 `.github/workflows/ci.yml`。
 
-| Agent | 数据来源 | 入口 |
-|---|---|---|
-| `qa` | 内部知识库（Milvus + FAQ + Redis 缓存） | `POST /api/v1/qa/ask` |
-| `research` | 公网（经 MCP 调 web_search 工具） | `POST /api/v1/research/ask` |
-| `crawler` | 指定网页（抓正文 → 结构化记录 → 落库） | `POST /api/v1/crawler/run` |
-| `ops` | 运维（查任务 / 导出 / 清文件 / 清缓存，经 MCP 工具） | `POST /api/v1/ask`（自动路由） |
+## 仓库里有什么、没有什么
 
-爬取数据全部存在 PostgreSQL（不落盘）：
+**包含**：全部源码、测试、迁移、前端、CI 配置、Dockerfile。
 
-| 表 | 内容 |
+**不包含**（`.gitignore` 挡住，需要自己准备）：
+
+| 内容 | 原因 |
 |---|---|
-| `crawl_tasks` | 任务目标、状态、页数/记录数、停止原因 |
-| `crawl_pages` | 正文（`content`）+ **原始 HTML（`html`，上限 30 万字符）** |
-| `crawl_records` | 结构化记录（JSON 文本） |
+| `.env` | 数据库密码、API Key、JWT 密钥 |
+| `data/` | 抓取数据、导出文件、回收站 |
+| `var/` | 运行日志、图表、临时脚本 |
+| 模型权重 | BGE-M3 与 reranker 约 4.3 GB，用环境变量指向本地路径 |
 
-'原始 HTML 一定要存：抽取规则出错时（比如字段名取错、丢字段），
-没有原文就只能重新访问站点，而站点内容可能已经变了。
+clone 下来跑不起来，通常就是缺这三类东西中的一个。
 
-需要文件时再导出（数据默认只在库里）：
+## 已知限制
 
-'```powershell
-python -m scripts.export_crawl --list        # 看最近任务
-python -m scripts.export_crawl --task 5      # 导出到 data/crawl/5/
+诚实列出，避免误解：
 
-# 导出目录会越攒越多，清一下（默认只统计，加 --apply 才删）
-python -m scripts.clean_crawl --list
-python -m scripts.clean_crawl --keep 3 --apply         # 只留最近 3 个任务
-python -m scripts.clean_crawl --older-than 7 --apply   # 删 7 天前的
-python -m scripts.clean_crawl --task 3 --apply         # 删指定任务
-python -m scripts.clean_crawl --older-than 30 --db --apply   # 连库里的老任务一起删
-```'
+- **无监控告警**：有 `/health`（含连接池状态），但没有 Prometheus 指标与慢查询日志
+- **DB 迁移只完成一部分**：新代码走 SQLAlchemy，旧模块仍是 asyncpg 原生池
+- **`deep` 模式对 JS 渲染页无效**：需要 playwright，当前只做了 HTTP 抓取
+- **多轮追问有第二道关**：追问能改写（"那包年呢" → "包年怎么收费"），
+  但"月付"与"按人头 300 元/月"这类同义表达检索层还认不出
+- **审批无通知**：管理员需手动刷新面板查看待审批
+- **`qa` 首字延迟 8~9 秒**：生成前的意图分类与策略选择串行
 
-```
-data/crawl/5/
-    manifest.json            任务元信息 + 文件清单
-    records.jsonl            结构化记录，一行一条
-    pages/0013-标题.html      原始 HTML
-    pages/0013-标题.txt       清洗后的正文（头部带来源 URL）
-```''
+更细的待办与修法记录在 `docs/待办.md`。
 
-**为什么 qa 不用 MCP**：它的检索是同进程内的函数调用，上 MCP 只会多一次网络往返和一个故障点。
-**为什么 research 用 MCP**：web 搜索是外部服务，且要被别的客户端复用，协议化才有价值。
+## License
 
-启动 MCP 服务（独立进程，research agent 依赖它）：
-
-```powershell
-python -m mcp_servers.web_search_server
-# 监听 127.0.0.1:8765，端点为 http://127.0.0.1:8765/mcp
-# 暴露的工具：web_search(query, max_results) / fetch_page(url, max_chars)
-```
-
-`.env` 里对应的地址：
-
-```
-WEB_SEARCH_MCP_URL=http://127.0.0.1:8765/mcp
-```
-
-验证工具能连上：
-
-```powershell
-python -c "import asyncio; from langchain_mcp_adapters.client import MultiServerMCPClient as M; print(asyncio.run(M({'ws':{'url':'http://127.0.0.1:8765/mcp','transport':'streamable_http'}}).get_tools()))"
-```
-
-网页前端顶部有模式切换：**自动（推荐）** / **知识库问答** / **联网研究**。三者共用同一张会话表，切换不丢上下文。
-
-### 按数据性质路由（而不是"两个助手并列"）
-
-联网搜索不是另一个问答系统，而是 RAG 的一个**检索增强组件**。两者的差别只在数据性质：
-
-| 维度 | 联网搜索 | 内部 RAG |
-|---|---|---|
-| 本质 | RAG 的一种特定实现 / 增强组件 | 通用的"检索 + 生成"框架 |
-| 典型数据源 | 公开互联网（实时、动态） | 私有知识库（静态、可控） |
-| 核心贡献 | 解决时效性与公开信息覆盖 | 解决私有知识利用与信息整合 |
-| **权限边界** | **无法处理私有数据的访问权限** | **可且必须嵌入企业权限体系** |
-
-`POST /api/v1/ask` 据此分派：
-
-```
-问题 → supervisor（按数据性质判断）
-        ├─ 内部 / 敏感 / 需权限 ──→ qa（自建 RAG，数据不出域）
-        │        └─ 查不到 → 权限闸门 ─┬─ 私有表述 → 不外发，提示用户
-        │                              └─ 可公开   → 补公网证据，统一作答
-        └─ 公开 / 时效性 ─────────→ research（联网 + 引用）
-```
-
-三个关键实现：
-
-1. **权限闸门**（`agents/supervisor/privacy.py`）：升级前先判断问题是否含私有表述（"我们公司""工号""内部规定"等）。命中就不外发——**联网搜索最大的风险不是搜到什么，而是把问题本身交出去了**。
-2. **统一证据结构**（`agents/research/evidence.py`）：内部文档和公网结果用同一个 `Evidence` 表示，只靠 `source_type` 区分。作答只有一份提示词、一次生成，公网资料标注为"仅供参考"，与内部口径冲突时以内部为准。
-3. **路由结论优先**：supervisor 判成内部问题后，qa 跳过二次分类（`force_professional`），避免两个模型判断打架。
-
-升级的判据是精排分数：`RETRIEVAL_MIN_SCORE`（默认 0.30）以下的片段直接丢弃；丢空即 `no_result`。实测相关问题 top1 ≥0.80、无关问题 ≤0.01，阈值有足够余量。
-
-**改了检索逻辑记得 bump 缓存版本**，否则旧答案还会被命中：
-
-```powershell
-python -c "import asyncio; from agents.qa.cache import bump_cache_version; print(asyncio.run(bump_cache_version()))"
-
-# 旧版本的键不会自动删，攒多了跑一下清理（先统计，确认后加 --apply）
-python -m scripts.clean_cache
-python -m scripts.clean_cache --apply
-```
-
-## 多租户与细粒度权限
-
-权限有三个维度，都来自 JWT（注册时可指定，生产应由管理员开通）：
-
-| 维度 | 举例 | 作用 |
-|---|---|---|
-| `tenant_id` | `tenant_default` / `tenant_demo` | 公司级隔离，跨租户完全不可见 |
-| `department` | `一号部门` / `二号部门` / `*` | 部门级；文档 `*` 表示全公司可见 |
-| `role` | `user` / `admin` | 角色级；文档 `min_role` 表示最低角色要求 |
-
-**检索条件的生成规则**（`RetrievalScope.filter_expr`）：
-
-```
-管理员（role=admin）：  tenant_id == "t1"
-普通用户（一号部门）：  tenant_id == "t1"
-                        and (department == "一号部门" or department == "*")
-                        and min_role in ["user"]
-普通用户（无部门 *）：  tenant_id == "t1" and department == "*" and min_role in ["user"]
-```
-
-注意 `*` 的两种含义：**文档上**表示全公司可见，**用户上**表示未分配部门（那就只能看公共文档）。
-
-隔离渗透到五层：
-
-| 层 | 隔离方式 |
-|---|---|
-| Milvus | chunk 带 `tenant_id` / `department` / `min_role`，检索表达式永远包含它们 |
-| 主键 | `md5(租户\|部门\|角色\|来源\|内容)`——只用内容哈希会让相同句子跨部门互相覆盖 |
-| FAQ | 表带 `tenant_id` + `department`，按「租户 × 部门」建多份 BM25 索引（详见下） |
-| 答案缓存 | 键含完整范围：`qa:ans:v{ver}:s{scope_hash}:{query_hash}` |
-| 提示词 / 来源列表 | 知识库主题与 `/sources` 都按同一范围过滤 |
-
-**FAQ 的索引范围**：BM25 必须先有候选集再算分（不能算完再过滤，否则会命中看不到的条目），
-所以按范围各建一份索引：
-
-```
-__all__     租户全部条目     （管理员）
-__public__  只有 department='*' （未分配部门的用户）
-一号部门     该部门 + '*' 的条目 （该部门用户）
-```
-
-同一句问题若在公共和部门各有一条，索引里**按问题去重、部门专属优先**——
-不去重的话两条近似文本会互相稀释 BM25 置信度（实测从 0.9 掉到 0.46，直接判未命中）。
-
-
-**灌数据要指定归属**：
-
-```powershell
-python -m scripts.ingest --reset --tenant tenant_default --department '*' --min-role user
-python -m scripts.ingest data\tenant_demo_kb --tenant tenant_demo
-python -m scripts.ingest data\dept_one_kb --tenant tenant_default --department 一号部门
-python -m scripts.ingest data\admin_kb --tenant tenant_default --min-role admin
-python -m scripts.ingest_faq --tenant tenant_default                      # 全公司公共
-python -m scripts.ingest_faq data\dept_one_faq.csv --department 一号部门   # 部门专属
-```
-
-验证（仓库内带了三套演示数据：公共 / 一号部门 / 管理员）：
-
-```
-carol（一号部门）问「2026 年市场费用预算是多少」→ 命中 dept_one_预算与报销
-dave （二号部门）问同一句                     → no_result（看不到）
-root （admin） 问「新增租户需要先做什么」      → 命中 admin_操作手册
-carol（一号部门）问同一句                     → no_result（角色不够）
-```
-
-实测可见条数：管理员 75 / 一号部门 65 / 二号部门 56 / 无部门 56 / 演示租户 8。
-
-> 部门名目前用「一号部门 / 二号部门」占位，接入真实组织架构后替换即可
-> （重灌数据，或 `UPDATE users SET department='真实部门'` 后重灌该部门文档）。
->
-> FAQ 已支持部门级：公共条目 `department='*'` 对所有部门可见，部门专属条目只有本部门能命中。
-> 实测 `carol`（一号部门）与 `dave`（二号部门）问同一句「你们怎么收费」，
-> 前者拿到部门结算价，后者拿到公共报价。
-
-验证隔离（仓库里带了 `tenant_demo` 的演示数据）：
-
-```
-alice（tenant_default）问「你们怎么收费」→ 按坐席数加对话量双维度计费…
-bob  （tenant_demo）  问同一句        → 演示租户按年包干，每年 9800 元…
-```
-
-三个注意点：
-
-- **改了 Milvus schema 必须 `--reset` 重建集合**；`CREATE TABLE IF NOT EXISTS` 不会改已有表结构，FAQ 表用的是 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 原地迁移。
-- **注册接口接受 `tenant_id` 只为本地验证**，生产环境应由管理员开通租户。
-- FAQ 命中阈值改成"相对均匀分布提升度"，与库大小无关（大库 0.93 / 小库 0.79 / 无关 0.00），默认 0.70。
-
-## 排错
-
-- **`conda : 无法识别`**：执行 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`（本机已设好），然后**重开终端**。
-- **`pyright` 报 Import 无法解析**：conda 环境没有 `pyvenv.cfg`，`pyproject.toml` 里用 `venvPath` + `venv` 显式指定，改名要同步改。
-- **`pip install` 装到别处**：确认 `(Get-Command python).Source` 指向 `...\envs\my-agent\python.exe`。
-- **PyCharm 在项目里建了 `venv/`**：那是基于 conda 环境又套一层的空壳，已删除。解释器请直接选 `...\envs\my-agent\python.exe`，不要让它再建 venv。
-
-## 下一步
-
-1. `app/config.py`（Settings）+ `app/main.py`（`/health` 先跑通）
-2. 落地第一个 Agent：LangGraph 状态图 / OpenAI Agents SDK / PydanticAI 选一
-3. 工具走 MCP server，别把工具逻辑写死在 prompt 里
-4. 第一天就挂 tracing（Langfuse）与 eval（promptfoo / deepeval）
+[MIT](LICENSE)
