@@ -38,6 +38,11 @@ router = APIRouter()
 
 class CacheCleanRequest(BaseModel):
     apply: bool = Field(default=False, description="是否真正删除，默认只统计")
+    kinds: list[str] = Field(
+        default_factory=lambda: ["qa", "analyst"],
+        description="要清理的类别：qa（旧版本问答缓存）、analyst（分析结果缓存）",
+    )
+    tenant: str = Field(default="", description="只清某个租户的分析缓存，留空表示全部")
     approval_token: str = Field(default="", description="审批票据")
     idempotency_key: str = Field(default="", description="幂等键")
 
@@ -68,6 +73,7 @@ async def cache_stats(user: dict[str, str] = Depends(get_current_user)) -> dict[
         "total_keys": data["total"],
         "current_keys": data["current"],
         "stale_keys": data["stale"],
+        "analyst_keys": data.get("analyst", 0),
         "backups": await list_backups(),
     }
 
@@ -208,14 +214,21 @@ async def cache_clean(
     user: dict[str, str] = Depends(get_current_user),
     _: None = Depends(rate_limit),
 ) -> dict[str, Any]:
+    selected = [k for k in request.kinds if k in {"qa", "analyst"}] or ["qa", "analyst"]
+    tenant = request.tenant or None
+
     if not request.apply:
-        report = await clean_cache_keys(apply=False)
+        report = await clean_cache_keys(apply=False, kinds=selected, tenant=tenant)
         return {
             "ok": report.version > 0,
             "dry_run": True,
+            "kinds": selected,
             "version": report.version,
             "stale": report.stale_total,
             "kept": report.kept_total,
+            "analyst_keys": sum(
+                len(scan.stale) for scan in report.scans if scan.pattern.startswith("analyst:cache")
+            ),
             "by_prefix": [
                 {"prefix": scan.label, "stale": len(scan.stale), "kept": scan.kept}
                 for scan in report.scans
@@ -224,11 +237,11 @@ async def cache_clean(
         }
 
     async def victims(_args: dict[str, Any]) -> list[Any]:
-        report = await clean_cache_keys(apply=False)
+        report = await clean_cache_keys(apply=False, kinds=selected, tenant=tenant)
         return [scan.label for scan in report.scans if scan.stale]
 
     async def runner(_args: dict[str, Any]) -> dict[str, Any]:
-        report = await clean_cache_keys(apply=True)
+        report = await clean_cache_keys(apply=True, kinds=selected, tenant=tenant)
         return {
             "version": report.version,
             "deleted": report.deleted,
@@ -245,7 +258,7 @@ async def cache_clean(
 
     result = await gateway_execute(
         "clean_cache",
-        {"apply": True},
+        {"apply": True, "kinds": sorted(selected), "tenant": request.tenant or ""},
         tenant_id=user["tenant_id"],
         user_id=user["user_id"],
         idempotency_key=request.idempotency_key or None,
@@ -254,7 +267,9 @@ async def cache_clean(
         victims=victims,
         verify=verify,
         rollback=rollback,
-        impact="清理旧版本缓存键",
+        impact="清理缓存："
+        + "+".join(selected)
+        + ("（租户 " + request.tenant + "）" if request.tenant else ""),
         reversible="先备份到 cache:trash:*，可恢复",
     )
     return result.as_dict()

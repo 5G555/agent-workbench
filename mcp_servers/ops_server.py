@@ -24,6 +24,8 @@ from mcp.server.fastmcp import FastMCP
 from agents.crawler.exporter import export_task
 from agents.crawler.store import get_crawl_store
 from agents.ops import trash
+from agents.ops.cache_maintenance import ALL_KINDS as ALL_CACHE_KINDS
+from agents.ops.cache_maintenance import ANALYST_PREFIX as ANALYST_CACHE_PREFIX
 from agents.ops.cache_maintenance import clean as clean_cache_keys
 from agents.ops.cache_maintenance import list_backups, restore_backup
 from agents.ops.cache_maintenance import overview as cache_overview
@@ -276,34 +278,49 @@ async def clean_exports(
 @mcp.tool()
 async def clean_cache(
     apply: bool = False,
+    kinds: list[str] | None = None,
+    tenant: str = "",
     approval_token: str = "",
     idempotency_key: str = "",
 ) -> dict[str, Any]:
-    """清理 Redis 里旧版本的缓存键：默认只统计；真删需要审批。
+    """清理 Redis 缓存：默认只统计；真删需要审批。
+
+    两类缓存：
+        qa      旧版本的问答/FAQ 缓存（按版本号判定残留）
+        analyst 分析结果缓存（按 租户+任务+问题+数据指纹，1 小时 TTL）
 
     删除前会先把键值备份到 cache:trash:*，可用 restore_cache 恢复；
     备份失败则一个都不删（Fail-Closed）。
 
     Args:
         apply: 是否真正删除（默认 False 只报告）
+        kinds: 要清的类别，默认 ["qa", "analyst"]
+        tenant: 只清某个租户的分析缓存（留空表示全部）
         approval_token: 审批票据
         idempotency_key: 幂等键
     """
+    selected = [k for k in (kinds or ALL_CACHE_KINDS) if k in ALL_CACHE_KINDS] or list(
+        ALL_CACHE_KINDS
+    )
     if not apply:
-        report = await clean_cache_keys(apply=False)
+        report = await clean_cache_keys(apply=False, kinds=selected, tenant=tenant or None)
         return {
             "ok": report.version > 0,
             "dry_run": True,
             "version": report.version,
+            "kinds": selected,
             "stale": report.stale_total,
             "kept": report.kept_total,
+            "analyst_keys": sum(
+                len(x.stale) for x in report.scans if x.pattern.startswith(ANALYST_CACHE_PREFIX)
+            ),
             "hint": "确认无误后传 apply=true（需要 approval_token）",
         }
 
     backup_id = ""
 
     async def victims(_args: dict[str, Any]) -> list[Any]:
-        report = await clean_cache_keys(apply=False)
+        report = await clean_cache_keys(apply=False, kinds=selected, tenant=tenant or None)
         return [len(s.stale) for s in report.scans for _ in s.stale]
 
     async def runner(_args: dict[str, Any]) -> dict[str, Any]:

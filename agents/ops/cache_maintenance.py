@@ -5,10 +5,15 @@ r"""Redis 缓存的巡检与清理（脚本与 MCP 工具共用一份实现）�
     运维 Agent 的 MCP 工具（clean_cache）。两边各写一份迟早会走样，
     尤其"哪些键算旧版本"这种规则一旦不一致，清理结果就对不上。
 
-清理范围（只碰这三种，别的一概不碰）：
+清理范围（只碰这几类，别的一概不碰）：
     qa:ans:*         问答答案（含 research 命名空间）
     faq:questions:*  FAQ 问题索引
     faq:tokens:*     FAQ 分词结果
+    analyst:cache:*  分析结果缓存（按 租户+任务+问题+数据指纹，1 小时 TTL）
+
+两类缓存的判定规则不同：
+    QA 缓存带版本号，只删「版本不是当前版本」的残留
+    分析缓存不带版本号，数据/问题变了 key 就变，所以按租户清或全清
 
 判断依据：键名里的版本号 `:v(\d+)`，与当前版本不同即视为残留。
 当前版本的缓存永远不删。
@@ -42,6 +47,14 @@ PATTERNS = [
     f"{FAQ_QUESTIONS_KEY}:*",
     f"{FAQ_TOKENS_KEY}:*",
 ]
+
+# 分析结果缓存前缀（agents/analyst/result_cache.py 写入）
+ANALYST_PREFIX = "analyst:cache"
+
+# 允许清理的缓存类别
+KIND_QA = "qa"
+KIND_ANALYST = "analyst"
+ALL_KINDS = (KIND_QA, KIND_ANALYST)
 
 # 单次 DEL 的键数，避免一次命令太大会阻塞
 BATCH_SIZE = 200
@@ -103,6 +116,25 @@ async def scan(pattern: str, current: int) -> PatternScan:
     return result
 
 
+async def scan_analyst(tenant: str | None = None) -> PatternScan:
+    """扫分析结果缓存。
+
+    与分析缓存本身的语义一致：它们没有版本号，
+    数据/问题/图表类型一变 key 就变，所以"匹配到即可清"。
+    tenant 为空时扫全部租户。
+    """
+    pattern = f"{ANALYST_PREFIX}:{tenant}:*" if tenant else f"{ANALYST_PREFIX}:*"
+    result = PatternScan(pattern=pattern)
+    client = await get_redis()
+    if client is None:
+        return result
+
+    async for raw in client.scan_iter(match=pattern, count=500):
+        key = raw if isinstance(raw, str) else raw.decode()
+        result.stale.append(key)
+    return result
+
+
 TRASH_PREFIX = "cache:trash"
 TRASH_TTL_SECONDS = 7 * 86400
 
@@ -126,7 +158,12 @@ async def _backup_keys(keys: list[str], version: int) -> str:
         except Exception:
             value = None
         if value is not None:
-            mapping[key] = value if isinstance(value, str) else str(value)
+            text_value = value if isinstance(value, str) else str(value)
+            # 分析缓存里带 base64 图片（单条可到几十 KB），
+            # 备份截断到 8KB：能证明删了什么，又不至于把备份撑爆
+            if key.startswith(ANALYST_PREFIX) and len(text_value) > 8192:
+                text_value = text_value[:8192]
+            mapping[key] = text_value
     if not mapping:
         return ""
 
@@ -178,8 +215,17 @@ async def list_backups() -> list[str]:
     return ids
 
 
-async def clean(apply: bool = False) -> CleanupReport:
-    """巡检并按需删除旧版本键；apply=True 时**先备份再删**。"""
+async def clean(
+    apply: bool = False,
+    kinds: tuple[str, ...] | list[str] | None = None,
+    tenant: str | None = None,
+) -> CleanupReport:
+    """巡检并按需删除缓存键；apply=True 时**先备份再删**。
+
+    kinds:  要处理的类别（qa / analyst），默认两类都处理
+    tenant: 仅当 kinds 含 analyst 时有意义——清哪个租户的分析缓存，空表示全部
+    """
+    selected = tuple(kinds) if kinds else ALL_KINDS
     current = await cache_version()
     report = CleanupReport(version=current, applied=apply)
     if current == 0:
@@ -189,8 +235,11 @@ async def clean(apply: bool = False) -> CleanupReport:
     if client is None:
         return report
 
-    for pattern in PATTERNS:
-        report.scans.append(await scan(pattern, current))
+    if KIND_QA in selected:
+        for pattern in PATTERNS:
+            report.scans.append(await scan(pattern, current))
+    if KIND_ANALYST in selected:
+        report.scans.append(await scan_analyst(tenant))
 
     if not apply:
         return report
@@ -224,7 +273,7 @@ async def clean(apply: bool = False) -> CleanupReport:
 async def overview() -> dict[str, int]:
     """缓存概览：当前版本、各前缀的键数与残留数。"""
     current = await cache_version()
-    summary = {"version": current, "total": 0, "stale": 0, "current": 0}
+    summary = {"version": current, "total": 0, "stale": 0, "current": 0, "analyst": 0}
     if current == 0:
         return summary
 
@@ -233,4 +282,7 @@ async def overview() -> dict[str, int]:
         summary["total"] += len(result.stale) + result.kept
         summary["stale"] += len(result.stale)
         summary["current"] += result.kept
+
+    analyst = await scan_analyst(None)
+    summary["analyst"] = len(analyst.stale)
     return summary

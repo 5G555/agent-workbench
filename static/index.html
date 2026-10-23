@@ -400,13 +400,20 @@
         <div>键总数<b id="cTotal">-</b></div>
         <div>当前版本<b id="cCur">-</b></div>
         <div>旧版本残留<b id="cStale">-</b></div>
+        <div>分析缓存<b id="cAnalyst">-</b></div>
       </div>
       <div class="tools">
-        <button class="primary" id="cacheClean">清理旧版本</button>
+        <label class="hint" style="align-self:center;display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="kindQa" checked /> 问答缓存
+        </label>
+        <label class="hint" style="align-self:center;display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="kindAnalyst" checked /> 分析缓存
+        </label>
+        <button class="primary" id="cacheClean">清理选中缓存</button>
         <select id="cacheBackup" style="min-width:170px"><option value="">（无备份）</option></select>
         <button id="cacheRestore">从备份恢复</button>
         <span class="hint" style="opacity:.6;align-self:center">
-          只删旧版本键；删除前先备份，可恢复
+          问答缓存只删旧版本；分析缓存按租户清。删除前先备份，可恢复
         </span>
       </div>
     </section>
@@ -1801,27 +1808,42 @@ async function purgeTrash(apply) {
 }
 
 async function cleanCache() {
-  const first = await apiFetch("/api/v1/ops/cache/clean", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apply: false }),
-  }).then((r) => r.json());
-
-  if (!first.stale) {
-    showToast(`没有旧版本残留（当前 v${first.version}，${first.kept} 个键都是当前版本）`);
+  const kinds = [];
+  if (document.getElementById("kindQa").checked) kinds.push("qa");
+  if (document.getElementById("kindAnalyst").checked) kinds.push("analyst");
+  if (!kinds.length) {
+    showToast("至少选择一种缓存", true);
     return;
   }
-  if (!confirm(`将清理 ${first.stale} 个旧版本键（会先备份，可恢复）。\n\n继续？`)) return;
 
+  // 先预演：分别报告问答旧版本残留和分析缓存条数
+  const preview = await apiFetch("/api/v1/ops/cache/clean", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apply: false, kinds }),
+  }).then((r) => r.json());
+
+  const qaStale = kinds.includes("qa") ? preview.stale || 0 : 0;
+  const analystCount = kinds.includes("analyst") ? preview.analyst_keys || 0 : 0;
+  if (!qaStale && !analystCount) {
+    showToast("选中的缓存没有需要清理的内容");
+    return;
+  }
+  const lines = [];
+  if (qaStale) lines.push(`问答旧版本残留 ${qaStale} 个`);
+  if (analystCount) lines.push(`分析结果缓存 ${analystCount} 条`);
+  if (!confirm(`将清理：\n· ${lines.join("\n· ")}\n\n会先备份，可恢复。继续？`)) return;
+
+  const body = { apply: true, kinds };
   let res = await apiFetch("/api/v1/ops/cache/clean", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apply: true }),
+    body: JSON.stringify(body),
   }).then((r) => r.json());
 
   // 高风险操作要求审批：拿到票据 → 管理员确认 → 带票据重试
   if (res.status === "needs_approval") {
-    res = await approveAndRetry(res, "/api/v1/ops/cache/clean", { apply: true });
+    res = await approveAndRetry(res, "/api/v1/ops/cache/clean", body);
     if (!res) return;
   }
   if (res.status === "blocked") {
@@ -1830,7 +1852,7 @@ async function cleanCache() {
   }
   const d = res.data || {};
   showToast(
-    `已清理 ${d.deleted ?? 0} 个旧版本键（当前版本保留 ${d.kept ?? "-"} 个）` +
+    `已清理 ${d.deleted ?? 0} 个键（保留 ${d.kept ?? "-"} 个）` +
     (d.backup_id ? `\n备份 ID：${d.backup_id}（可在运维区恢复）` : "")
   );
   loadOps();
