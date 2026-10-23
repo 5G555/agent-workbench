@@ -180,6 +180,8 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       WEB_SEARCH_MCP_URL: http://mcp-web:8765/mcp
+      TAVILY_API_KEY: 
+      DEEPSEEK_API_KEY: 
       OPS_MCP_URL: http://mcp-ops:8766/mcp
       # 容器内用服务名，不是 localhost
       DB_HOST: postgres
@@ -190,7 +192,6 @@ services:
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
       REDIS_URL: redis://redis:6379/0
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       APP_ENV: ${APP_ENV:-local}
