@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    # 测试需要 Postgres 与 Redis；Milvus 相关用例用 MILVUS_ENABLED=0 跳过
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: myagent
+          POSTGRES_PASSWORD: myagent
+          POSTGRES_DB: myagent_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U myagent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_USER: myagent
+      DB_PASSWORD: myagent
+      DB_NAME: myagent_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      JWT_SECRET_KEY: ci-only-secret-not-for-production
+      DEEPSEEK_API_KEY: sk-ci-placeholder
+      # 没有 Milvus 的用例由测试自身跳过（不阻塞 lint/type/单元测试）
+      MILVUS_ENABLED: "0"
+      CACHE_ENABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff pyright pytest pytest-asyncio
+
+      # 三项检查分开跑：哪一步红了一眼能看出来
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (pyright)
+        run: pyright
+
+      - name: Tests (pytest)
+        run: pytest -q

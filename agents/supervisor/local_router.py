@@ -5,8 +5,7 @@
     "qa / research / crawler 三分类"属于短文本分类，小模型足够。
     只有置信度低时才回退给大模型（见 router.route）。
 
-模型：D:/AI-Models/classifier/intent_router_ft
-    底座是 bert-base-chinese 的微调权重，分类头按 3 类重新初始化后训练。
+模型：底座是 bert-base-chinese 的微调权重，分类头按 3 类重新初始化后训练。
     训练脚本 scripts/finetune_intent.py，数据 scripts/build_intent_dataset.py。
 
 标签顺序与训练脚本必须一致：0=qa 1=research 2=crawler
