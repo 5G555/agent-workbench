@@ -15,6 +15,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"migrations/versions/*.py" = ["E501"]
 "tests/**" = ["S101", "S105", "S106"]
 # FastAPI 的 Depends(...) 必须写在参数默认值里，B008 在这里是误报；
 # S105 命中的是 token_type = "bearer" 这类协议常量，不是密码。
