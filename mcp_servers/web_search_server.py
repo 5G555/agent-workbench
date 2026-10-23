@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -29,8 +31,8 @@ from core.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
-HOST = "127.0.0.1"
-PORT = 8765
+HOST = os.getenv("WEB_SEARCH_MCP_HOST", "127.0.0.1")
+PORT = int(os.getenv("WEB_SEARCH_MCP_PORT", "8765"))
 
 mcp = FastMCP("web-search", host=HOST, port=PORT)
 

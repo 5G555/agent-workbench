@@ -43,6 +43,7 @@ COPY main.py config.py ./
 COPY core ./core
 COPY agents ./agents
 COPY api ./api
+COPY mcp_servers ./mcp_servers
 COPY static ./static
 
 # 非 root 运行

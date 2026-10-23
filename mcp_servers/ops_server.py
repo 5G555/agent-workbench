@@ -17,6 +17,7 @@ agents/ops/gateway.execute：
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -37,7 +38,10 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-mcp = FastMCP("ops-tools", host="127.0.0.1", port=8766)
+# 容器里必须监听 0.0.0.0，否则宿主机/其他容器连不进来
+_host = os.getenv("OPS_MCP_HOST", "127.0.0.1")
+_port = int(os.getenv("OPS_MCP_PORT", "8766"))
+mcp = FastMCP("ops-tools", host=_host, port=_port)
 
 
 def _tenant(tenant_id: str = "") -> str:
@@ -408,5 +412,5 @@ async def purge_trash(
 
 
 if __name__ == "__main__":
-    logger.info("ops.mcp_start", url="http://127.0.0.1:8766/mcp")
+    logger.info("ops.mcp_start", url=f"http://{_host}:{_port}/mcp")
     mcp.run(transport="streamable-http")
