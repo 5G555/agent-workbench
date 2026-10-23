@@ -194,6 +194,9 @@ async def cache_check_node(state: AnalystState) -> dict[str, Any]:
             "task_id": int(payload.get("task_id") or (task_ids[0] if task_ids else 0)),
             "tasks": [int(t) for t in (payload.get("tasks") or task_ids)],
             "answer": str(payload.get("answer") or ""),
+            # 必须补一条 AIMessage：orchestrator 取"最后一条消息"当答案，
+            # 没有它就退回成用户提问，面板上会出现"结论=问题原文"
+            "messages": [AIMessage(content=str(payload.get("answer") or ""))],
             "answer_mode": "pandas",
             "structured_output": {
                 **(payload.get("structured_output") or {}),
