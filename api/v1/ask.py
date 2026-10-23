@@ -181,3 +181,48 @@ async def ask_stream(
                 await save_turn(user["user_id"], request.session_id, request.message, answer, mode)
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+class RouteCorrection(BaseModel):
+    """用户认为路由错了：记下来用于调阈值/补规则。"""
+
+    session_id: str = Field(default="", description="会话 ID")
+    question: str = Field(..., min_length=1, description="当时的问题")
+    routed_agent: str = Field(..., description="实际路由到的 Agent")
+    corrected_agent: str = Field(..., description="用户认为应该去的 Agent")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = Field(default="", description="当时的路由理由")
+
+
+@router.post("/correct", summary="记录一次路由纠正")
+async def record_correction(
+    body: RouteCorrection,
+    user: dict[str, str] = Depends(get_current_user),
+) -> dict[str, Any]:
+    from agents.supervisor.feedback import get_feedback_store
+
+    store = get_feedback_store()
+    await store.ensure_table()
+    row_id = await store.record(
+        tenant_id=user["tenant_id"],
+        user_id=user["user_id"],
+        question=body.question,
+        routed_agent=body.routed_agent,
+        corrected_agent=body.corrected_agent,
+        session_id=body.session_id,
+        confidence=body.confidence,
+        reason=body.reason,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@router.get("/corrections", summary="路由纠正统计")
+async def correction_stats(
+    user: dict[str, str] = Depends(get_current_user),
+    limit: int = 100,
+) -> dict[str, Any]:
+    from agents.supervisor.feedback import get_feedback_store
+
+    store = get_feedback_store()
+    await store.ensure_table()
+    return await store.summary(user["tenant_id"], limit)

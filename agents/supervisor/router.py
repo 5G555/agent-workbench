@@ -259,12 +259,28 @@ class RouteDecision(BaseModel):
 
 
 class ResolvedRoute(RouteDecision):
+    """路由结果。no_retrieval=True 表示这条路径不接触任何检索组件。"""
+
+    no_retrieval: bool = False
     """在模型判断之上补齐"要不要确认"与采集参数。"""
 
     need_confirm: bool = False
     confirm_question: str = ""
     entry_url: str = ""
     goal: str = ""
+
+
+def apply_confidence_guard(agent: str, confidence: float, threshold: float) -> tuple[str, str]:
+    """灰区兜底：置信度不够就回到 direct。
+
+    返回 (最终 agent, 原因)。这层单独抽出来是为了能单测——
+    "低置信度该走哪"是路由里最容易写错又不显眼的地方。
+    """
+    if agent in {"help", "direct"}:
+        return agent, "无需检索"
+    if confidence < threshold:
+        return "direct", f"置信度 {confidence:.2f} 低于阈值 {threshold:.2f}，改直接回答"
+    return agent, ""
 
 
 def resolve_confirmation(decision: RouteDecision, query: str) -> ResolvedRoute:
@@ -352,6 +368,14 @@ async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
     if decision is None:
         return _decide(query, "direct", "路由失败，默认直接回答")
 
+    settings = get_settings()
+    final_agent, guard_reason = apply_confidence_guard(
+        decision.agent, decision.confidence, settings.route_confidence_threshold
+    )
+    if guard_reason and final_agent != decision.agent:
+        decision.agent = cast(AgentName, final_agent)
+        decision.reason = guard_reason
+
     resolved = resolve_confirmation(decision, query)
     logger.info(
         "supervisor.routed",
@@ -378,6 +402,7 @@ def _decide(
         confidence=1.0,
         reason=reason,
         need_confirm=need_confirm,
+        no_retrieval=agent in {"help", "direct"},
     )
     logger.info(
         "supervisor.routed",

@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # 高置信度直接用本地 BERT（~10ms），低置信度回退给大模型（~1.5s）
     intent_classifier_enabled: bool = True
     intent_classifier_path: str = "D:/AI-Models/classifier/intent_router_ft"
+    # 路由灰区的置信度阈值：低于它就默认 direct（不检索），
+    # 因为误检索的代价（4~8 秒 + 答非所问）远大于误直接答
+    route_confidence_threshold: float = 0.60
     intent_confidence_threshold: float = 0.70
 
     # ── Redis 答案缓存 ──
