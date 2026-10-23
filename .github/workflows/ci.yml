@@ -34,6 +34,8 @@ jobs:
           --health-retries 5
 
     env:
+      # 不依赖 pytest 推断 rootdir：直接把仓库根放进导入路径
+      PYTHONPATH: ${{ github.workspace }}
       APP_ENV: test
       DB_HOST: 127.0.0.1
       DB_PORT: "5432"
