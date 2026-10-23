@@ -1,5 +1,9 @@
 # Agent Workbench — 多 Agent 智能问答与数据平台
 
+![CI](https://github.com/5G555/agent-workbench/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.13-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 一个可运行的多 Agent 系统：内部知识问答、联网研究、网页采集、数据分析、运维操作
 由一个路由层统一分派，全部走同一套权限、缓存与审计。
 
