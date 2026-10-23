@@ -119,6 +119,14 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-change-me}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     expose: ["8765"]
+    healthcheck:
+      # 覆盖镜像自带的 /health（那是给 app 用的 8000 端口），
+      # 这里只探自己的端口能不能连上
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   mcp-ops:
     image: myagent:${APP_TAG:-dev}
@@ -139,6 +147,14 @@ services:
       - ./var:/app/var
       - ./data:/app/data
     expose: ["8766"]
+    healthcheck:
+      # 覆盖镜像自带的 /health（那是给 app 用的 8000 端口），
+      # 这里只探自己的端口能不能连上
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8766), 3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   app:
     build:
