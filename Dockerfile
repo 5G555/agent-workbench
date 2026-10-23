@@ -13,10 +13,11 @@
 
 FROM python:3.13-slim
 
-# 国内源：直接用清华 PyPI 镜像装 torch（CPU 版在 PyPI 上有 wheel）。
-# 之前试过阿里云的 pytorch-wheels 目录页 + --find-links，
-# 196MB 的 wheel 下到一半连接挂死（停滞一小时无报错），不可靠。
-ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+# 默认走官方源（配合外网/VPN 使用；国内可传 --build-arg PIP_INDEX=清华源 覆盖）。
+# torch 单独从 pytorch 官方 CPU 索引装：那里是 196MB 的纯 CPU wheel，
+# 而 PyPI 上的 linux wheel 自带 CUDA，554MB，对这个项目没用。
+ARG PIP_INDEX=https://pypi.org/simple
+ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -30,9 +31,12 @@ WORKDIR /app
 
 # 先装依赖：只要 requirements.txt 没变，这一层就能命中缓存
 COPY requirements.txt ./
-# torch 用清华 PyPI 镜像装（CPU wheel ~200MB），失败会立刻报错而不是静默挂起
-RUN pip install --no-cache-dir torch --index-url ${PIP_INDEX} \
- && pip install --no-cache-dir -r requirements.txt
+# 1) torch 走 CPU 索引（体积小、无 CUDA 依赖）
+# 2) 其余包走 PIP_INDEX
+# --timeout 与 --retries：外网线路波动时直接报错重试，而不是静默挂住
+RUN pip install --no-cache-dir --timeout 60 --retries 5 \
+        torch --index-url ${TORCH_CPU_INDEX} \
+ && pip install --no-cache-dir --timeout 60 --retries 5 -r requirements.txt
 
 # 再拷代码：改代码不会让依赖层失效
 COPY main.py config.py ./
