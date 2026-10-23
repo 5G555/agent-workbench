@@ -44,6 +44,9 @@ COPY core ./core
 COPY agents ./agents
 COPY api ./api
 COPY mcp_servers ./mcp_servers
+COPY scripts ./scripts
+COPY migrations ./migrations
+COPY alembic.ini ./
 COPY static ./static
 
 # 非 root 运行
