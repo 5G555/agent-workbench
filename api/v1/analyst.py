@@ -24,7 +24,8 @@ router = APIRouter()
 class AnalystRequest(BaseModel):
     question: str = Field(..., min_length=1, description="自然语言分析问题")
     session_id: str = Field(default="analyst", description="会话 ID（日志串联用）")
-    task_id: int = Field(default=0, description="只看某个采集任务（路径 B 用）")
+    task_id: int = Field(default=0, description="只看某个采集任务")
+    task_ids: list[int] = Field(default_factory=list, description="多任务对比（最多 5 个）")
 
 
 class AnalystResponse(BaseModel):
@@ -37,12 +38,15 @@ class AnalystResponse(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = 0
     task_id: int = 0
+    tasks: list[int] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
     # 路径 B：pandas 代码分析
     code: str = ""
     stdout: str = ""
     figures: list[str] = Field(default_factory=list)  # base64 PNG
     prep: dict[str, Any] = Field(default_factory=dict)
+    # 模型看到的表结构概览（排查"它为什么这么写"用）
+    overview: str = ""
     error_msg: str | None = None
 
 
@@ -62,6 +66,7 @@ async def ask(
             "department": user.get("department", "*"),
             "role": user.get("role", "user"),
             "task_id": request.task_id or None,
+            "task_ids": request.task_ids or [],
         },
     )
     result: AgentResponse = await get_orchestrator().handle(agent_request)
@@ -77,10 +82,12 @@ async def ask(
         rows=[r for r in (structured.get("rows") or []) if isinstance(r, dict)],
         row_count=int(structured.get("row_count") or 0),
         task_id=int(structured.get("task_id") or 0),
+        tasks=[int(t) for t in (structured.get("tasks") or [])],
         fields=[str(f) for f in (structured.get("fields") or [])],
         code=str(structured.get("code") or ""),
         stdout=str(structured.get("stdout") or ""),
         figures=[str(f) for f in (structured.get("figures") or [])],
         prep=structured.get("prep") or {},
+        overview=str(structured.get("overview") or ""),
         error_msg=result.error_msg,
     )

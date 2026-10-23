@@ -34,10 +34,14 @@ CODE_SYSTEM = """你是数据分析工程师。给我一段 pandas 代码，不�
 1. 只做数据分析与绘图：不要读写文件、不要联网、不要写 import。
 2. 需要输出数值时用 print()，或赋给变量 result（会被读取）。
 3. 需要画图就用 plt；一张图即可，标题用英文（避免中文字体缺失）。
+   样式（配色/字号/网格/尺寸）已经统一设好，不要自己 set figsize 或颜色，
+   除非某张图确实需要特殊处理（比如双轴图的右轴标签）。
 4. 原始字段是字符串！数值列用 <列名>_num，时间列用 <列名>_dt，
    直接对原始列做算术或 corr 会得到 nan。
 5. 先做必要清洗（类型转换、去空、排序），再计算。
-6. 只输出代码，不要 markdown 代码块。"""
+6. 如果数据里有一列 task_id，说明合并了多个采集任务，
+   对比时按它分组（groupby），图例用「任务 <编号>」。
+7. 只输出代码，不要 markdown 代码块。"""
 
 CODE_USER = """【数据概况】
 {overview}
@@ -148,33 +152,59 @@ def field_distribution(records: list[dict], top: int = 8) -> list[dict]:
     return stats
 
 
+async def _resolve_task_ids(state: AnalystState, tenant: str) -> list[int]:
+    """决定分析哪些任务：显式多任务 > 单个任务 > 最近一个已完成任务。"""
+    explicit = [int(t) for t in (state.get("task_ids") or []) if int(t) > 0]
+    if explicit:
+        return explicit[:5]  # 最多 5 个，防止一次拉爆
+    single = int(state.get("task_id") or 0)
+    if single:
+        return [single]
+    latest = await _latest_task(tenant)
+    return [latest] if latest else []
+
+
 async def explore_node(state: AnalystState) -> dict[str, Any]:
-    """用 MCP 工具取采集记录。"""
+    """用 MCP 工具取采集记录；多个任务时合并成一张表（带 task_id 列）。"""
     tenant = str(state.get("tenant_id") or "tenant_default")
-    task_id = int(state.get("task_id") or 0)
+    tool = None
     try:
-        if not task_id:
-            task_id = await _latest_task(tenant)
-        if not task_id:
+        client = await get_mcp_client("ops")
+        tool = {t.name: t for t in await client.get_tools()}["task_records"]
+        task_ids = await _resolve_task_ids(state, tenant)
+        if not task_ids:
             return {
                 "answer": "还没有任何采集任务，先让爬虫抓一轮数据再分析。",
                 "answer_mode": "no_data",
                 "structured_output": {"answer_mode": "no_data"},
             }
 
-        client = await get_mcp_client("ops")
-        tools = {t.name: t for t in await client.get_tools()}
-        raw = await tools["task_records"].ainvoke(
-            {"task_id": task_id, "limit": 500, "tenant_id": tenant}
-        )
-        payload = parse_mcp_dict(raw)
-        if not payload.get("ok"):
+        items: list[dict] = []
+        used: list[int] = []
+        for task_id in task_ids:
+            raw = await tool.ainvoke({"task_id": task_id, "limit": 500, "tenant_id": tenant})
+            payload = parse_mcp_dict(raw)
+            if not payload.get("ok"):
+                logger.warning(
+                    "analyst.task_read_failed",
+                    task=task_id,
+                    error=str(payload.get("error"))[:120],
+                )
+                continue
+            for item in payload.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                # 多任务时把 task_id 塞进记录本身，
+                # 这样预处理后它就是一列，模型可以 groupby("task_id")
+                items.append({"data": {**item, "task_id": task_id}})
+            used.append(task_id)
+
+        if not items:
             return {
-                "answer": f"读取任务 #{task_id} 的记录失败：{payload.get('error', '未知原因')}",
-                "answer_mode": "error",
-                "structured_output": {"answer_mode": "error"},
+                "answer": f"任务 {task_ids} 都没有可分析的记录。",
+                "answer_mode": "no_data",
+                "structured_output": {"answer_mode": "no_data", "tasks": task_ids},
             }
-        items = [{"data": item} for item in payload.get("items") or []]
     except Exception as exc:
         logger.warning("analyst.explore_failed", error=str(exc))
         return {
@@ -183,8 +213,12 @@ async def explore_node(state: AnalystState) -> dict[str, Any]:
             "structured_output": {"answer_mode": "error"},
         }
 
-    logger.info("analyst.explored", task=task_id, records=len(items))
-    return {"task_id": task_id, "records": items}
+    logger.info("analyst.explored", tasks=used, records=len(items))
+    return {
+        "task_id": used[0],
+        "tasks": used,
+        "records": items,
+    }
 
 
 async def code_node(state: AnalystState) -> dict[str, Any]:
@@ -228,6 +262,7 @@ async def code_node(state: AnalystState) -> dict[str, Any]:
             "code_retried": True,
             "code_finished": False,
             "prep": report.as_dict(),
+            "frame_overview": overview,
         }
 
     return {
@@ -240,6 +275,7 @@ async def code_node(state: AnalystState) -> dict[str, Any]:
         "prep": report.as_dict(),
         "code_retried": True,
         "code_finished": True,
+        "frame_overview": overview,
     }
 
 
@@ -255,11 +291,14 @@ async def narrative_node(state: AnalystState) -> dict[str, Any]:
     code = str(state.get("code") or "")
     prep = state.get("prep") or {}
 
+    tasks = [int(t) for t in (state.get("tasks") or [])]
     base_output = {
         "answer_mode": "pandas",
         "task_id": task_id,
+        "tasks": tasks,
         "row_count": len(records),
         "prep": prep,
+        "overview": str(state.get("frame_overview") or ""),
         "code": code,
         "stdout": stdout[:2000],
         "figures": figures,

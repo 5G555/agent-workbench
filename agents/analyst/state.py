@@ -23,6 +23,8 @@ class AnalystState(TypedDict, total=False):
     question: str
     entry_url: str  # 问题里带的网址（有就先去抓）
     task_id: int  # 指定分析哪个采集任务
+    task_ids: list[int]  # 多任务对比时用
+    tasks: list[int]  # 实际用到的任务（回填给前端）
 
     # 取数
     records: list[dict]
@@ -30,6 +32,7 @@ class AnalystState(TypedDict, total=False):
 
     # 预处理
     prep: dict
+    frame_overview: str
 
     # 代码执行
     code: str

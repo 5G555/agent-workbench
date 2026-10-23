@@ -497,6 +497,9 @@
         <input id="anaInput" placeholder="例如：这个月有多少会话 / 抓取到的数据里作者分布如何" />
         <button class="send" id="anaSend">分析</button>
       </div>
+      <div class="inputbar" style="margin-top:8px">
+        <input id="anaTaskIds" placeholder="任务号（可选；多个用逗号分隔，如 5,9 表示对比）" />
+      </div>
       <div class="chips" id="anaChips"></div>
       <div id="anaCatalogBox" class="hint" style="display:none;margin-top:10px;opacity:.85"></div>
     </section>
@@ -515,6 +518,12 @@
       <h3 id="anaCodeTitle">执行过程 <button class="mini" id="anaCopySql">复制</button></h3>
       <pre id="anaSql" class="sqlbox"></pre>
       <div id="anaTable"></div>
+      <details id="anaOverviewBox" style="display:none;margin-top:10px">
+        <summary style="cursor:pointer;opacity:.75;font-size:12.5px">
+          模型看到的数据（表结构 / 类型 / 样例）
+        </summary>
+        <pre id="anaOverview" class="sqlbox" style="margin-top:8px"></pre>
+      </details>
     </section>
   </div>
 </main>
@@ -1366,6 +1375,16 @@ function renderAnaTable(columns, rows) {
   target.innerHTML = `<table class="opstable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function parseTaskIds() {
+  const raw = (document.getElementById("anaTaskIds").value || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,，\s]+/)
+    .map((x) => parseInt(x, 10))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .slice(0, 5);
+}
+
 async function runAnalyze() {
   const input = document.getElementById("anaInput");
   const question = input.value.trim();
@@ -1380,14 +1399,20 @@ async function runAnalyze() {
     const res = await apiFetch("/api/v1/analyst/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, session_id: "analyst-panel" }),
+      body: JSON.stringify({
+        question,
+        session_id: "analyst-panel",
+        task_ids: parseTaskIds(),
+      }),
     });
     const data = await res.json();
 
     const badge = [];
     if (data.mode) badge.push(`模式 ${data.mode}`);
     if (data.row_count) badge.push(`${data.row_count} 行`);
-    if (data.task_id) badge.push(`任务 #${data.task_id}`);
+    const tasks = data.tasks && data.tasks.length ? data.tasks : data.task_id ? [data.task_id] : [];
+    if (tasks.length === 1) badge.push(`任务 #${tasks[0]}`);
+    else if (tasks.length > 1) badge.push(`对比 ${tasks.map((t) => "#" + t).join(" / ")}`);
 
     document.getElementById("anaResultCard").style.display = "";
     document.getElementById("anaAnswer").innerHTML = renderMarkdown(
@@ -1418,6 +1443,15 @@ async function runAnalyze() {
       renderAnaTable(data.columns || [], data.rows || []);
     } else {
       document.getElementById("anaSqlCard").style.display = "none";
+    }
+
+    // 把"模型看到的数据"摊开：出问题时能立刻判断是数据形状不对还是代码写错
+    const overviewBox = document.getElementById("anaOverviewBox");
+    if (data.overview) {
+      overviewBox.style.display = "";
+      document.getElementById("anaOverview").textContent = data.overview;
+    } else {
+      overviewBox.style.display = "none";
     }
     document.getElementById("anaMeta").textContent =
       data.mode === "pandas"

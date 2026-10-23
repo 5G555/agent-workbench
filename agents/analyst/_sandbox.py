@@ -59,11 +59,47 @@ ALLOWED_BUILTINS = {
 }
 
 
+# 统一的图表样式：颜色、字号、网格、线宽
+# 为什么在沙箱里强制：图表样式不该由模型每次随手决定，
+# 否则同一个面板里两张图配色/字号完全不同，看起来像两个人做的。
+STYLE_PRESET = {
+    "figure.figsize": (8.6, 4.6),
+    "figure.dpi": 110,
+    "figure.autolayout": True,
+    "axes.grid": True,
+    "grid.alpha": 0.28,
+    "grid.linestyle": "--",
+    "grid.linewidth": 0.7,
+    "axes.edgecolor": "#cbd5e1",
+    "axes.linewidth": 0.8,
+    "axes.titlesize": 13,
+    "axes.titleweight": "semibold",
+    "axes.labelsize": 10.5,
+    "axes.labelcolor": "#475569",
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "xtick.color": "#475569",
+    "ytick.color": "#475569",
+    "legend.fontsize": 9,
+    "legend.frameon": False,
+    "lines.linewidth": 1.9,
+    "lines.markersize": 4.2,
+    "font.size": 10,
+}
+
+COLOR_CYCLE = ["#2b6cb0", "#dd6b20", "#38a169", "#805ad5", "#d53f8c", "#319795"]
+
+
 def main() -> None:
     import matplotlib
+    from cycler import cycler
 
     matplotlib.use("Agg")  # 无界面后端，才能在没有显示器的环境出图
     import matplotlib.pyplot as plt
+
+    # 注入统一样式（模型自己设的 figsize / 颜色仍会覆盖，但不设时就是这套）
+    plt.rcParams.update(STYLE_PRESET)  # type: ignore[arg-type]
+    plt.rcParams["axes.prop_cycle"] = cycler(color=COLOR_CYCLE)
     import numpy as np
     import pandas as pd
 
