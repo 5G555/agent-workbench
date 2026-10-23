@@ -34,8 +34,10 @@ CODE_SYSTEM = """你是数据分析工程师。给我一段 pandas 代码，不�
 1. 只做数据分析与绘图：不要读写文件、不要联网、不要写 import。
 2. 需要输出数值时用 print()，或赋给变量 result（会被读取）。
 3. 需要画图就用 plt；一张图即可，标题用英文（避免中文字体缺失）。
-4. 先做必要清洗（类型转换、去空、排序），再计算。
-5. 只输出代码，不要 markdown 代码块。"""
+4. 原始字段是字符串！数值列用 <列名>_num，时间列用 <列名>_dt，
+   直接对原始列做算术或 corr 会得到 nan。
+5. 先做必要清洗（类型转换、去空、排序），再计算。
+6. 只输出代码，不要 markdown 代码块。"""
 
 CODE_USER = """【数据概况】
 {overview}
@@ -214,13 +216,9 @@ async def code_node(state: AnalystState) -> dict[str, Any]:
 
     draft = draft.removeprefix("```python").removeprefix("```").removesuffix("```").strip()
 
-    # records 形状是 [{"data": {...}}]，先展开成纯字段字典，
-    # 否则沙箱里 pd.DataFrame(records) 只会得到一列 data
-    flat_records = [
-        item["data"] if isinstance(item, dict) and isinstance(item.get("data"), dict) else item
-        for item in records
-    ]
-    result = await run_code(flat_records, draft)
+    # 直接把预处理好的 frame 交给沙箱：
+    # 转换过的 _num / _dt 列在沙箱里仍然可用，模型不用再从字符串转一遍
+    result = await run_code(code=draft, frame=frame)
 
     if not result.ok and not state.get("code_retried"):
         logger.info("analyst.code_retry", error=result.error[:80])

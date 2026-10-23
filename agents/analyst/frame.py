@@ -110,12 +110,14 @@ def build_frame(records: list[dict[str, Any]], dedupe: bool = True) -> tuple[Any
             report.numeric.append(f"{column}_num")
             continue
 
-        date_hits = sum(1 for v in values if DATE_PATTERN.match(v))
-        if values and date_hits / len(values) > 0.9:
-            parsed = pd.to_datetime(series, errors="coerce", format="mixed")
-            if float(parsed.notna().sum()) / max(len(parsed), 1) > 0.9:
-                frame[f"{column}_dt"] = parsed
-                report.datetime.append(f"{column}_dt")
+        # 日期识别交给 pandas 宽松解析：
+        #   "2026-10-22"、"Oct 22, 2026"、"2026年10月22日" 都能认，
+        #   比正则覆盖更全（正则当初只认 ISO 格式，害得英文日期没转过来）
+        parsed = pd.to_datetime(series, errors="coerce", format="mixed")
+        valid = float(parsed.notna().sum()) / max(len(series.dropna()), 1)
+        if valid > 0.9:
+            frame[f"{column}_dt"] = parsed
+            report.datetime.append(f"{column}_dt")
 
     report.rows = len(frame)
     report.columns = [str(c) for c in frame.columns]
@@ -127,9 +129,22 @@ def frame_overview(frame: Any, max_rows: int = 8) -> str:
     if frame is None or getattr(frame, "empty", True):
         return "（没有可用数据）"
 
+    numeric_cols = [str(c) for c in frame.columns if str(c).endswith("_num")]
+    datetime_cols = [str(c) for c in frame.columns if str(c).endswith("_dt")]
+
     lines = [f"数据形状：{frame.shape[0]} 行 × {frame.shape[1]} 列", "列与类型："]
     for column in frame.columns:
-        lines.append(f"  - {column}: {frame[column].dtype}")
+        hint = ""
+        if str(column).endswith("_num"):
+            hint = "  ← 数值列，可直接计算"
+        elif str(column).endswith("_dt"):
+            hint = "  ← 时间列，可直接排序/画时间轴"
+        lines.append(f"  - {column}: {frame[column].dtype}{hint}")
+
+    if numeric_cols or datetime_cols:
+        lines.append("")
+        lines.append("【重要】原始列是字符串，直接参与计算会得到 nan。")
+        lines.append(f"  计算请用这些列：{', '.join(numeric_cols + datetime_cols)}")
     lines.append("")
     lines.append("前几行：")
     lines.append(frame.head(max_rows).to_string(index=False))

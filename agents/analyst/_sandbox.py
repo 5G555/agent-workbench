@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import pickle
 import sys
 
 ALLOWED_BUILTINS = {
@@ -67,10 +68,13 @@ def main() -> None:
     import pandas as pd
 
     payload = json.loads(sys.stdin.read())
-    records = payload.get("records") or []
     code = str(payload.get("code") or "")
 
-    frame = pd.DataFrame(records)
+    if payload.get("frame_b64"):
+        # 父进程预处理好的 DataFrame：dtype（含 _num / _dt）完整保留
+        frame = pickle.loads(base64.b64decode(payload["frame_b64"]))  # noqa: S301
+    else:
+        frame = pd.DataFrame(payload.get("records") or [])
     namespace = {
         "__builtins__": ALLOWED_BUILTINS,
         "df": frame,

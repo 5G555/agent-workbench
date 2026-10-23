@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import pickle
 import re
 import sys
 import time
@@ -84,15 +86,35 @@ def screen_code(code: str) -> str:
     return reason
 
 
-async def run_code(records: list[dict], code: str) -> CodeResult:
-    """执行一段 pandas 代码，返回 stdout / 图片 / 结果。"""
+async def run_code(
+    records: list[dict] | None = None,
+    code: str = "",
+    frame: object | None = None,
+) -> CodeResult:
+    """执行一段 pandas 代码，返回 stdout / 图片 / 结果。
+
+    两种入参：
+        frame   —— 预处理好的 DataFrame（推荐）。用 pickle 传给沙箱，
+                   这样 _num / _dt 的 dtype 完整保留。
+        records —— 原始记录列表，沙箱内自己 pd.DataFrame()。
+
+    为什么优先用 frame：
+        预处理已经把 "1,234.50" 转成浮点、把 "Oct 22, 2026" 转成时间，
+        只传原始记录等于把预处理白做了——模型在沙箱里看到的仍是字符串。
+    """
     started = time.perf_counter()
     cleaned, reason = sanitize_code(code)
     if reason:
         return CodeResult(ok=False, error=reason, elapsed_ms=0)
     code = cleaned
 
-    payload = json.dumps({"records": records, "code": code}, ensure_ascii=False)
+    payload_obj: dict[str, object] = {"code": code}
+    if frame is not None:
+        # pickle 的是我们自己构造的 DataFrame，不含外部输入，反序列化风险可控
+        payload_obj["frame_b64"] = base64.b64encode(pickle.dumps(frame)).decode("ascii")
+    else:
+        payload_obj["records"] = records or []
+    payload = json.dumps(payload_obj, ensure_ascii=False)
     try:
         process = await asyncio.create_subprocess_exec(
             sys.executable,
