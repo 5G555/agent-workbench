@@ -32,6 +32,7 @@ from core.orchestrator import (
     ExecutionMode,  # noqa: F401 - 保留给后续 pipeline 模式使用
     get_orchestrator,
 )
+from core.query_rewrite import rewrite_question
 
 logger = get_logger(__name__)
 
@@ -104,7 +105,13 @@ async def ask(
     _: None = Depends(rate_limit),
 ) -> AskResponse:
     agent_request = _build_request(request, user)
-    agent_request.context["history"] = await load_history(user["user_id"], request.session_id)
+    history = await load_history(user["user_id"], request.session_id)
+    # 追问改写："那包年呢" → "你们包年怎么收费"，否则检索会落空
+    rewritten = await rewrite_question(request.message, history)
+    if rewritten != request.message:
+        agent_request.user_message = rewritten
+    agent_request.context["history"] = history
+    agent_request.context["original_message"] = request.message
 
     orchestrator = get_orchestrator()
     result: AgentResponse = (
@@ -149,7 +156,13 @@ async def ask_stream(
     _: None = Depends(rate_limit),
 ) -> StreamingResponse:
     agent_request = _build_request(request, user)
-    agent_request.context["history"] = await load_history(user["user_id"], request.session_id)
+    history = await load_history(user["user_id"], request.session_id)
+    # 追问改写："那包年呢" → "你们包年怎么收费"，否则检索会落空
+    rewritten = await rewrite_question(request.message, history)
+    if rewritten != request.message:
+        agent_request.user_message = rewritten
+    agent_request.context["history"] = history
+    agent_request.context["original_message"] = request.message
 
     async def events() -> AsyncIterator[str]:
         answer = ""
