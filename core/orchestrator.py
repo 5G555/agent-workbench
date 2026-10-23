@@ -37,6 +37,8 @@ class AgentType(StrEnum):
     OPS = "ops"  # 运维（通过 MCP 工具查任务 / 导出 / 清理）
     ANALYST = "analyst"  # 数据分析（采集数据 + pandas + 绘图）
     METRICS = "metrics"  # 系统指标（SQL 视图，运维可观测性的一部分）
+    HELP = "help"  # 能力说明（问"你能做什么"）
+    DIRECT = "direct"  # 直接回答（不检索、不取数）
 
 
 class AgentRequest(BaseModel):
@@ -138,6 +140,16 @@ class Orchestrator:
                 from agents.ops.metrics.graph import build_metrics_graph
 
                 self._agent_graphs[agent_type] = build_metrics_graph()
+
+            elif agent_type == AgentType.HELP:
+                from agents.help.graph import build_help_graph
+
+                self._agent_graphs[agent_type] = build_help_graph()
+
+            elif agent_type == AgentType.DIRECT:
+                from agents.direct.graph import build_direct_graph
+
+                self._agent_graphs[agent_type] = build_direct_graph()
 
             else:
                 raise ValueError(f"未知 AgentType: {agent_type}")
@@ -306,6 +318,54 @@ class Orchestrator:
                 content="系统处理请求时遇到问题，请稍后再试。",  # 给用户的友好兜底文案
                 error_msg=str(e),
             )
+
+    async def _fallback_to_direct(
+        self,
+        request: AgentRequest,
+        research_answer: str,
+        research_state: dict[str, Any],
+    ) -> AgentResponse | None:
+        """判断 research 是否"空手而归"，是则改让 direct 回答。
+
+        判据（任一命中即视为空手）：
+            · 没有任何来源
+            · 答案里出现"没有找到 / 未找到 / 无法回答 / 没有相关资料"
+        """
+        sources = research_state.get("sources") or []
+        markers = ("没有找到", "未找到", "无法回答", "没有相关资料", "没有直接")
+        empty = not sources or any(marker in research_answer for marker in markers)
+        if not empty:
+            return None
+
+        logger.info(
+            "orchestrator.fallback_to_direct",
+            reason="research 无可用证据",
+            sources=len(sources),
+        )
+        direct_request = AgentRequest(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            session_id=request.session_id,
+            agent_type=AgentType.DIRECT,
+            user_message=request.user_message,
+            context=request.context,
+        )
+        direct = await self._run_single_agent(direct_request)
+        if not direct.success or not direct.content:
+            return None
+
+        # 把"没有外部证据"这件事如实告诉用户，别让 direct 的回答显得有依据
+        note = "（说明：我尝试联网检索但没有找到可用资料，以上回答基于通用知识，未引用外部来源。）"
+        merged = f"{direct.content}\n\n{note}"
+        return AgentResponse(
+            success=True,
+            agent_type=request.agent_type,
+            content=merged,
+            structured={**(direct.structured or {}), "fallback_from": "research"},
+            fallback_used=True,
+            degrade_reason="research 无可用证据，改由通用回答",
+            metadata={"researched": False},
+        )
 
     def _build_state(self, request: AgentRequest) -> dict[str, Any]:
         """构建图的初始 State。
@@ -552,6 +612,13 @@ class Orchestrator:
         content = (
             str(last_message.text) if hasattr(last_message, "text") else str(last_message.content)
         )
+
+        # research 搜不到可用资料时，别把"没找到"当答案交给用户：
+        # 落回 direct 让模型用自己的知识给出可用回答，并说明证据缺失
+        if request.agent_type == AgentType.RESEARCH:
+            fallback = await self._fallback_to_direct(request, content, result_state)
+            if fallback is not None:
+                return fallback
 
         metadata: dict[str, Any] = {}
         # research 图会把联网检索状态写进 state，透出来让调用方分得清"搜失败"和"没搜到"

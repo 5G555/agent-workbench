@@ -26,10 +26,22 @@ from typing import Literal, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from agents.help.nodes import is_capability_intent
 from agents.qa.nodes import kb_topics
+from agents.supervisor.evidence import (
+    MUST,
+    NEVER,
+    has_live_signal,
+    has_method_signal,
+    is_private_scope,
+    needs_evidence,
+)
 from config import get_settings
 from core.llm_factory import LLMFactory
 from core.logger import get_logger
+
+# 路由可选的 Agent（direct = 不调工具，直接让模型答）
+AgentName = Literal["qa", "research", "crawler", "ops", "analyst", "metrics", "help", "direct"]
 
 logger = get_logger(__name__)
 
@@ -131,6 +143,16 @@ ANALYST_KEYWORDS = (
     "增长率",
     "top",
     "排行",
+    # 图表类型：说出"K 线/柱状图"通常就是要在采集数据上出图
+    "k 线",
+    "k线",
+    "图表",
+    "柱状图",
+    "散点图",
+    "饼图",
+    "直方图",
+    "双轴",
+    "箱线图",
 )
 
 # 问"多少钱"是问价格，不是分析
@@ -167,6 +189,12 @@ def is_analyst_intent(text: str) -> bool:
         return False
     # 带 URL 的是去抓，不是分析（抓完再分析由 crawler/chain 处理）
     if detect_url(text):
+        return False
+    # 实时/易变事实（天气、股价…）不归分析，除非明确在问采集到的数据
+    if has_live_signal(text) and not any(h in lowered for h in CRAWL_DATA_HINTS):
+        return False
+    # "K 线怎么画"是问方法，不是让我分析数据
+    if has_method_signal(text) and not any(h in lowered for h in CRAWL_DATA_HINTS):
         return False
     # 提到抓取到的数据这类说法时仍归分析；只是抓取一下归 crawler
     return not mentions_crawl(text) or any(h in lowered for h in CRAWL_DATA_HINTS)
@@ -207,7 +235,7 @@ def implies_crawl(text: str) -> bool:
 class RouteDecision(BaseModel):
     """路由结果。"""
 
-    agent: Literal["qa", "research", "crawler", "ops", "analyst", "metrics"] = Field(default="qa")
+    agent: AgentName = Field(default="qa")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
@@ -259,35 +287,52 @@ def resolve_confirmation(decision: RouteDecision, query: str) -> ResolvedRoute:
 
 
 async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
-    """给问题选一个 Agent，并判断是否需确认。
+    """按闸门顺序给问题选一个 Agent。
 
-    路由顺序：
-        0. 运维关键词（清理/导出/任务列表）→ ops，直接命中，不劳模型
-        1. 本地 BERT（~10ms）：置信度 ≥ 阈值就直接采信
-        2. 否则回退给大模型（~1.5s）：意图模糊时更稳
-    都失败时退回 qa（本地答错还能升级到联网）。
+    设计原则（改自旧版的一锤定音）：
+        1. 用户说得很具体的（URL、破坏性动作、指标词）用规则锁死，规则比模型准
+        2. 需要外部证据的按 evidence 判定走 research
+        3. 方法/生成/解释类直接让模型答，不检索
+        4. 灰度交给模型，但**默认 direct**——误检索的代价远大于误直接答
     """
     if not query.strip():
         return ResolvedRoute(agent="qa", confidence=1.0, reason="空问题")
 
+    # 1. 能力自述：问的是本系统，不能交给联网检索
+    if is_capability_intent(query):
+        return _decide(query, "help", "能力咨询")
+
+    # 2. 私有资料（"我们/公司/报价"）：查内部知识库，不是外部事实
+    if is_private_scope(query) and not mentions_crawl(query):
+        return _decide(query, "qa", "私有资料")
+
+    # 3. 带 URL 且明确要采集
+    if detect_url(query) and mentions_crawl(query):
+        return _decide(query, "crawler", "URL + 采集动作", need_confirm=True)
+
+    # 4. 破坏性动作
     if is_ops_intent(query):
-        resolved = ResolvedRoute(agent="ops", confidence=1.0, reason="运维关键词命中")
-        logger.info("supervisor.routed", query=query, agent="ops", need_confirm=False)
-        return resolved
+        return _decide(query, "ops", "运维动作")
 
+    # 5. 系统指标
     if is_metrics_intent(query):
-        resolved = ResolvedRoute(agent="metrics", confidence=1.0, reason="系统指标关键词命中")
-        logger.info("supervisor.routed", query=query, agent="metrics", need_confirm=False)
-        return resolved
+        return _decide(query, "metrics", "系统指标")
 
+    # 6. 采集数据分析
     if is_analyst_intent(query):
-        resolved = ResolvedRoute(agent="analyst", confidence=1.0, reason="分析关键词命中")
-        logger.info("supervisor.routed", query=query, agent="analyst", need_confirm=False)
-        return resolved
+        return _decide(query, "analyst", "采集数据分析")
 
-    decision = await _route_local(query)
+    # 7/8. 证据判定（明确要查 / 明确不用查）
+    evidence = needs_evidence(query)
+    if evidence == MUST:
+        return _decide(query, "research", "需要实时外部事实")
+    if evidence == NEVER:
+        return _decide(query, "direct", "方法/生成/解释类，无需检索")
+
+    # 9. 灰度：交给模型判断"需不需要工具"，判不准就 direct
+    decision = await _route_llm(query, tenant_id)
     if decision is None:
-        decision = await _route_llm(query, tenant_id)
+        return _decide(query, "direct", "路由失败，默认直接回答")
 
     resolved = resolve_confirmation(decision, query)
     logger.info(
@@ -296,7 +341,32 @@ async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
         agent=resolved.agent,
         confidence=round(resolved.confidence, 2),
         need_confirm=resolved.need_confirm,
+        evidence=evidence,
         reason=resolved.reason,
+    )
+    return resolved
+
+
+def _decide(
+    query: str,
+    agent: str,
+    reason: str,
+    *,
+    need_confirm: bool = False,
+) -> ResolvedRoute:
+    """统一出口：打日志 + 组装 ResolvedRoute，避免每个闸门重复写。"""
+    resolved = ResolvedRoute(
+        agent=cast(AgentName, agent),
+        confidence=1.0,
+        reason=reason,
+        need_confirm=need_confirm,
+    )
+    logger.info(
+        "supervisor.routed",
+        query=query,
+        agent=agent,
+        need_confirm=need_confirm,
+        reason=reason,
     )
     return resolved
 
@@ -326,7 +396,7 @@ async def _route_local(query: str) -> RouteDecision | None:
         return None
 
     return RouteDecision(
-        agent=cast(Literal["qa", "research", "crawler", "ops", "analyst", "metrics"], agent),
+        agent=cast(AgentName, agent),
         confidence=confidence,
         reason="本地意图模型",
     )
