@@ -13,8 +13,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from agents.analyst.charts import chart_hint, detect_chart_type
 from agents.analyst.code_runner import run_code
 from agents.analyst.frame import build_frame, frame_overview
+from agents.analyst.result_cache import cache_key, data_fingerprint, get_cached, put_cached
 from agents.analyst.state import AnalystState
 from agents.research.mcp_client import get_mcp_client, parse_mcp_dict, parse_mcp_payload
 from core.llm_factory import LLMFactory
@@ -104,8 +106,19 @@ async def dispatch_node(state: AnalystState) -> dict[str, Any]:
     """问题里带 URL 就先抓再分析，否则直接分析已有数据。"""
     question = _extract_question(state)
     url = detect_question_url(question)
-    logger.info("analyst.dispatch", question=question[:40], has_url=bool(url))
-    return {"question": question, "entry_url": url, "answer_mode": "chain" if url else "explore"}
+    chart = detect_chart_type(question)
+    logger.info(
+        "analyst.dispatch",
+        question=question[:40],
+        has_url=bool(url),
+        chart=chart or "-",
+    )
+    return {
+        "question": question,
+        "entry_url": url,
+        "chart_type": chart,
+        "answer_mode": "chain" if url else "explore",
+    }
 
 
 def route_after_dispatch(state: AnalystState) -> str:
@@ -150,6 +163,52 @@ def field_distribution(records: list[dict], top: int = 8) -> list[dict]:
         )
     stats.sort(key=lambda item: item["distinct"])
     return stats
+
+
+async def cache_check_node(state: AnalystState) -> dict[str, Any]:
+    """命中缓存就直接返回，省掉 4~8 秒的重新分析。"""
+    question = _extract_question(state)
+    tenant = str(state.get("tenant_id") or "tenant_default")
+    chart = str(state.get("chart_type") or "")
+
+    # 带 URL 的是"先抓再分析"，数据还没抓，缓存没意义
+    if state.get("entry_url"):
+        return {"cached": False}
+
+    try:
+        task_ids = await _resolve_task_ids(state, tenant)
+    except Exception as exc:
+        logger.warning("analyst.cache_resolve_failed", error=str(exc)[:120])
+        return {"cached": False}
+
+    fingerprint = await data_fingerprint(task_ids)
+    if not fingerprint:
+        return {"cached": False, "task_ids": task_ids}
+
+    key = cache_key(tenant, task_ids, question, fingerprint, chart)
+    payload = await get_cached(key)
+    if payload:
+        return {
+            "cached": True,
+            "cache_key": key,
+            "task_id": int(payload.get("task_id") or (task_ids[0] if task_ids else 0)),
+            "tasks": [int(t) for t in (payload.get("tasks") or task_ids)],
+            "answer": str(payload.get("answer") or ""),
+            "answer_mode": "pandas",
+            "structured_output": {
+                **(payload.get("structured_output") or {}),
+                "cached": True,
+                "chart_type": chart,
+            },
+        }
+    return {"cached": False, "cache_key": key, "task_ids": task_ids}
+
+
+def route_after_cache(state: AnalystState) -> str:
+    """命中缓存直接结束；否则按有没有 URL 决定先抓还是直接分析。"""
+    if state.get("cached"):
+        return "done"
+    return "chain" if state.get("entry_url") else "explore"
 
 
 async def _resolve_task_ids(state: AnalystState, tenant: str) -> list[int]:
@@ -234,11 +293,15 @@ async def code_node(state: AnalystState) -> dict[str, Any]:
     frame, report = build_frame(records)
     overview = frame_overview(frame)
 
+    chart = str(state.get("chart_type") or "")
+    hint = chart_hint(chart)
+    target = f"{question}\n\n{hint}" if hint else question
+
     llm = LLMFactory.get_llm("analyst", temperature=0)
     prompt = (
         CODE_REPAIR_USER.format(code=code, error=error)
         if error and code
-        else CODE_USER.format(overview=overview, question=question)
+        else CODE_USER.format(overview=overview, question=target)
     )
     try:
         response = await llm.ainvoke(
@@ -303,6 +366,8 @@ async def narrative_node(state: AnalystState) -> dict[str, Any]:
         "stdout": stdout[:2000],
         "figures": figures,
         "chart_count": len(figures),
+        "chart_type": str(state.get("chart_type") or ""),
+        "cached": False,
     }
 
     if not records:
@@ -348,6 +413,29 @@ async def narrative_node(state: AnalystState) -> dict[str, Any]:
         answer = str(response.content).strip()
     except Exception as exc:
         answer = f"（模型总结失败：{exc}）\n\n{context}"
+
+    # 写缓存：key 用实际分析到的任务重新算（chain 路径抓完才知道任务号）
+    if not state.get("entry_url"):
+        tenant = str(state.get("tenant_id") or "tenant_default")
+        tasks = [int(t) for t in (state.get("tasks") or [])]
+        fingerprint = await data_fingerprint(tasks)
+        if fingerprint:
+            key = cache_key(
+                tenant,
+                tasks,
+                question,
+                fingerprint,
+                str(state.get("chart_type") or ""),
+            )
+            await put_cached(
+                key,
+                {
+                    "answer": answer,
+                    "task_id": task_id,
+                    "tasks": tasks,
+                    "structured_output": base_output,
+                },
+            )
 
     return {
         "answer": answer,

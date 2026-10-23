@@ -16,12 +16,13 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agents.analyst.nodes import (
+    cache_check_node,
     chain_node,
     code_node,
     dispatch_node,
     explore_node,
     narrative_node,
-    route_after_dispatch,
+    route_after_cache,
 )
 from agents.analyst.state import AnalystState
 from core.logger import get_logger
@@ -40,14 +41,18 @@ def build_analyst_graph(checkpointer: Any = None):
     builder = StateGraph(AnalystState)
 
     builder.add_node("dispatch", dispatch_node)
+    builder.add_node("cache_check", cache_check_node)
     builder.add_node("chain", chain_node)
     builder.add_node("explore", explore_node)
     builder.add_node("code", code_node)
     builder.add_node("narrative", narrative_node)
 
     builder.add_edge(START, "dispatch")
+    builder.add_edge("dispatch", "cache_check")
     builder.add_conditional_edges(
-        "dispatch", route_after_dispatch, {"chain": "chain", "explore": "explore"}
+        "cache_check",
+        route_after_cache,
+        {"done": END, "chain": "chain", "explore": "explore"},
     )
     builder.add_edge("chain", "explore")
     builder.add_edge("explore", "code")

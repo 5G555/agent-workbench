@@ -34,6 +34,13 @@ class AnalystState(TypedDict, total=False):
     prep: dict
     frame_overview: str
 
+    # 图表类型（用户明确要求时才会填）
+    chart_type: str
+
+    # 结果缓存
+    cached: bool
+    cache_key: str
+
     # 代码执行
     code: str
     code_stdout: str

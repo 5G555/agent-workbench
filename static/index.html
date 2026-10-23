@@ -1333,10 +1333,10 @@ async function loadOps() {
 // 分析分区：自然语言提问 → 结论 + 实际执行的 SQL + 结果表
 // ══════════════════════════════════════════════════════
 const ANALYST_EXAMPLES = [
-  "抓取到的数据里作者分布如何，画个柱状图",
-  "抓到的数据里标签出现次数排前 5 的",
-  "这批数据里哪个字段取值最集中",
-  "抓到的数据按字段做个统计摘要",
+  "画出收盘价的 K 线图",
+  "按周聚合，用柱状图展示成交量",
+  "成交量和收盘价的关系，画散点图",
+  "对比两只股票的走势（任务号填两个）",
 ];
 
 function loadAnalystCatalog() {
@@ -1408,6 +1408,12 @@ async function runAnalyze() {
     const data = await res.json();
 
     const badge = [];
+    if (data.cached) badge.push("缓存命中");
+    const CHART_LABELS = {
+      candlestick: "K 线图", bar: "柱状图", line: "折线图", scatter: "散点图",
+      pie: "饼图", hist: "直方图", box: "箱线图", heatmap: "热力图", area: "面积图",
+    };
+    if (data.chart_type) badge.push(CHART_LABELS[data.chart_type] || data.chart_type);
     if (data.mode) badge.push(`模式 ${data.mode}`);
     if (data.row_count) badge.push(`${data.row_count} 行`);
     const tasks = data.tasks && data.tasks.length ? data.tasks : data.task_id ? [data.task_id] : [];

@@ -47,6 +47,8 @@ class AnalystResponse(BaseModel):
     prep: dict[str, Any] = Field(default_factory=dict)
     # 模型看到的表结构概览（排查"它为什么这么写"用）
     overview: str = ""
+    chart_type: str = ""
+    cached: bool = False  # 是否命中结果缓存
     error_msg: str | None = None
 
 
@@ -89,5 +91,7 @@ async def ask(
         figures=[str(f) for f in (structured.get("figures") or [])],
         prep=structured.get("prep") or {},
         overview=str(structured.get("overview") or ""),
+        chart_type=str(structured.get("chart_type") or ""),
+        cached=bool(structured.get("cached")),
         error_msg=result.error_msg,
     )

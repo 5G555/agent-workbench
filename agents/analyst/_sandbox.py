@@ -21,6 +21,7 @@ import io
 import json
 import pickle
 import sys
+from typing import Any
 
 ALLOWED_BUILTINS = {
     "abs": abs,
@@ -90,6 +91,66 @@ STYLE_PRESET = {
 COLOR_CYCLE = ["#2b6cb0", "#dd6b20", "#38a169", "#805ad5", "#d53f8c", "#319795"]
 
 
+def build_kline(frame: Any, plt: Any, np: Any) -> Any:
+    """返回一个 kline(df, date_col, open_col, high_col, low_col, close_col) 函数。
+
+    matplotlib 没有蜡烛图，这里用「影线 + 实体」手画：
+        影线 = 当日的最高/最低价（细竖线）
+        实体 = 开盘到收盘（矩形），涨用红、跌用绿（国内习惯）
+    放在沙箱里而不是让模型每次现写，是为了保证每张 K 线长一个样。
+    """
+
+    def kline(
+        df: Any,
+        date_col: str = "Date_dt",
+        open_col: str = "Open_num",
+        high_col: str = "High_num",
+        low_col: str = "Low_num",
+        close_col: str = "Close_num",
+        title: str = "Candlestick",
+    ) -> Any:
+        cols = [date_col, open_col, high_col, low_col, close_col]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise KeyError(f"缺少列 {missing}，可用列：{list(df.columns)}")
+
+        data = df.dropna(subset=[open_col, high_col, low_col, close_col]).copy()
+        data = data.sort_values(date_col)
+        if data.empty:
+            raise ValueError("没有可用的 OHLC 数据（开高低收有缺失）")
+
+        x = np.arange(len(data))
+        opens = data[open_col].to_numpy(dtype=float)
+        highs = data[high_col].to_numpy(dtype=float)
+        lows = data[low_col].to_numpy(dtype=float)
+        closes = data[close_col].to_numpy(dtype=float)
+
+        _figure, axis = plt.subplots()
+        axis.vlines(x, lows, highs, color="#94a3b8", linewidth=0.9)
+        rising = closes >= opens
+        colors = np.where(rising, "#e11d48", "#059669")  # 红涨绿跌
+        axis.bar(
+            x,
+            np.abs(closes - opens) + (highs.max() - lows.min()) * 0.0008,
+            bottom=np.minimum(opens, closes),
+            width=0.62,
+            color=colors,
+            edgecolor=colors,
+        )
+
+        step = max(1, len(x) // 8)
+        ticks = x[::step]
+        axis.set_xticks(ticks)
+        axis.set_xticklabels(
+            [str(v)[:10] for v in data[date_col].iloc[::step]], rotation=40, ha="right"
+        )
+        axis.set_title(title)
+        axis.set_ylabel("Price")
+        return axis
+
+    return kline
+
+
 def main() -> None:
     import matplotlib
     from cycler import cycler
@@ -124,6 +185,7 @@ def main() -> None:
         "timedelta": __import__("datetime").timedelta,
         "re": __import__("re"),
         "json": json,
+        "kline": build_kline(frame, plt, np),
     }
 
     buffer = io.StringIO()
