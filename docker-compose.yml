@@ -91,6 +91,19 @@ services:
   # ── 应用本体（默认不启动，用 --profile app 才拉起来）──
   # 启动：docker compose --profile app up -d --build
   # Redis 用宿主机的（6379），通过 host.docker.internal 访问
+  redis:
+    image: redis:7-alpine
+    profiles: ["app"]
+    command: redis-server --save 60 1 --appendonly yes
+    volumes:
+      - redis_data:/data
+    expose: ["6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   mcp-web:
     image: myagent:${APP_TAG:-dev}
     profiles: ["app"]
@@ -119,7 +132,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-myagent}
       DB_NAME: ${DB_NAME:-myagent}
       MILVUS_HOST: milvus
-      REDIS_URL: redis://host.docker.internal:6379/0
+      REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-change-me}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
@@ -145,6 +158,8 @@ services:
         condition: service_started
       mcp-ops:
         condition: service_started
+      redis:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -158,7 +173,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
-      REDIS_URL: redis://host.docker.internal:6379/0
+      REDIS_URL: redis://redis:6379/0
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -176,6 +191,7 @@ services:
       - ./var:/app/var
 
 volumes:
+  redis_data:
   postgres_data:
   etcd_data:
   minio_data:
