@@ -22,6 +22,28 @@ MUST = "must"
 NEVER = "never"
 GRAY = "gray"
 
+# 闲聊词：命中直接归 direct，哪怕含"今天"这种时点词
+CHITCHAT_WORDS = (
+    "心情",
+    "开心",
+    "难过",
+    "累了",
+    "好累",
+    "无聊",
+    "哈哈",
+    "嘿嘿",
+    "在吗",
+    "你好",
+    "早上好",
+    "晚上好",
+    "谢谢你",
+    "多谢",
+    "辛苦了",
+    "讲个笑话",
+    "陪我聊",
+    "聊天",
+)
+
 # 实时/时点类词：命中基本就该查
 LIVE_WORDS = (
     "天气",
@@ -178,6 +200,8 @@ def needs_evidence(text: str) -> str:
     if not question:
         return GRAY
 
+    if any(word in question.lower() for word in CHITCHAT_WORDS):
+        return NEVER
     if any(word in question.lower() for word in COMPARISON_WORDS):
         return MUST
     if has_method_signal(question):

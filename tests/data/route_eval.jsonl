@@ -1,0 +1,41 @@
+{"id": "cap-01", "cat": "能力自述", "q": "你可以做什么", "expect": "help"}
+{"id": "cap-02", "cat": "能力自述", "q": "你能干什么", "expect": "help"}
+{"id": "cap-03", "cat": "能力自述", "q": "你是谁", "expect": "help"}
+{"id": "cap-04", "cat": "能力自述", "q": "这个系统有哪些功能", "expect": "help"}
+{"id": "chat-01", "cat": "闲聊", "q": "你好", "expect": "direct"}
+{"id": "chat-02", "cat": "闲聊", "q": "谢谢你", "expect": "direct"}
+{"id": "chat-03", "cat": "闲聊", "q": "今天心情不错", "expect": "direct"}
+{"id": "chat-04", "cat": "闲聊", "q": "讲个笑话吧", "expect": "direct"}
+{"id": "chat-05", "cat": "闲聊", "q": "在吗", "expect": "direct"}
+{"id": "gen-01", "cat": "通识方法", "q": "K 线怎么画", "expect": "direct"}
+{"id": "gen-02", "cat": "通识方法", "q": "什么是向量检索", "expect": "direct"}
+{"id": "gen-03", "cat": "通识方法", "q": "帮我写一封道歉邮件", "expect": "direct"}
+{"id": "gen-04", "cat": "通识方法", "q": "移动平均和 EMA 有什么区别", "expect": "direct"}
+{"id": "gen-05", "cat": "通识方法", "q": "帮我画个流程图", "expect": "direct"}
+{"id": "gen-06", "cat": "通识方法", "q": "Python 列表推导怎么写", "expect": "direct"}
+{"id": "gen-07", "cat": "通识方法", "q": "怎么提高睡眠质量", "expect": "direct"}
+{"id": "qa-01", "cat": "内部业务", "q": "你们怎么收费", "expect": "qa"}
+{"id": "qa-02", "cat": "内部业务", "q": "发票怎么开", "expect": "qa"}
+{"id": "qa-03", "cat": "内部业务", "q": "合同模板在哪里下载", "expect": "qa"}
+{"id": "qa-04", "cat": "内部业务", "q": "公司内部流程怎么走", "expect": "qa"}
+{"id": "qa-05", "cat": "内部业务", "q": "新增租户要先做什么", "expect": "qa"}
+{"id": "met-01", "cat": "系统指标", "q": "一共有多少会话", "expect": "metrics"}
+{"id": "met-02", "cat": "系统指标", "q": "FAQ 命中率是多少", "expect": "metrics"}
+{"id": "met-03", "cat": "系统指标", "q": "上周有多少条点踩", "expect": "metrics"}
+{"id": "met-04", "cat": "系统指标", "q": "采集任务数是多少", "expect": "metrics"}
+{"id": "ana-01", "cat": "采集分析", "q": "抓取到的数据里作者分布如何", "expect": "analyst"}
+{"id": "ana-02", "cat": "采集分析", "q": "画出收盘价的 K 线图", "expect": "analyst"}
+{"id": "ana-03", "cat": "采集分析", "q": "用柱状图展示每周成交量", "expect": "analyst"}
+{"id": "ana-04", "cat": "采集分析", "q": "抓到的数据有多少条记录", "expect": "analyst"}
+{"id": "ana-05", "cat": "采集分析", "q": "这批数据里标签出现次数排前五的", "expect": "analyst"}
+{"id": "cra-01", "cat": "采集动作", "q": "抓取 https://stockanalysis.com/stocks/msft/history/ 的行情表", "expect": "crawler"}
+{"id": "cra-02", "cat": "采集动作", "q": "帮我采集 https://example.com/list 这个页面", "expect": "crawler"}
+{"id": "ops-01", "cat": "运维动作", "q": "把旧版本缓存清掉", "expect": "ops"}
+{"id": "ops-02", "cat": "运维动作", "q": "导出目录清理一下", "expect": "ops"}
+{"id": "ops-03", "cat": "运维动作", "q": "现在有哪些采集任务", "expect": "ops"}
+{"id": "ops-04", "cat": "运维动作", "q": "回收站里有什么", "expect": "ops"}
+{"id": "live-01", "cat": "实时事实", "q": "今天天气怎么样", "expect": "research"}
+{"id": "live-02", "cat": "实时事实", "q": "苹果股票现在多少钱", "expect": "research"}
+{"id": "live-03", "cat": "实时事实", "q": "最新版 Python 是几点几", "expect": "research"}
+{"id": "live-04", "cat": "实时事实", "q": "2026 年向量数据库怎么选", "expect": "research"}
+{"id": "live-05", "cat": "实时事实", "q": "美元兑人民币汇率是多少", "expect": "research"}

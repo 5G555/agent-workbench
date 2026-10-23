@@ -88,6 +88,7 @@ IMPLICIT_CRAWL_HINTS = ("竞品", "同行", "对标", "他们网站", "官网数
 
 # 运维意图关键词：查任务、导出、清理这些"动作"不值得过一遍模型
 OPS_KEYWORDS = (
+    "回收站",
     "清理",
     "清掉",
     "删除导出",
@@ -143,6 +144,10 @@ ANALYST_KEYWORDS = (
     "增长率",
     "top",
     "排行",
+    "排前",
+    "前五",
+    "前十",
+    "次数",
     # 图表类型：说出"K 线/柱状图"通常就是要在采集数据上出图
     "k 线",
     "k线",
@@ -159,7 +164,18 @@ ANALYST_KEYWORDS = (
 PRICE_HINTS = ("钱", "价格", "费用", "收费", "报价", "贵")
 
 # "分析的对象是我们采集到的数据"这类说法
-CRAWL_DATA_HINTS = ("抓取到", "采集到", "抓到的", "爬取到", "采集的数据", "抓取的数据")
+CRAWL_DATA_HINTS = (
+    "抓取到",
+    "采集到",
+    "抓到的",
+    "爬取到",
+    "采集的数据",
+    "抓取的数据",
+    "这批数据",
+    "这些数据",
+    "数据里",
+    "数据中",
+)
 
 URL_PATTERN = re.compile(r"https?://[^\s，。；、）)\"']+")
 
@@ -169,8 +185,10 @@ def is_metrics_intent(text: str) -> bool:
     lowered = (text or "").lower()
     if not lowered:
         return False
-    if detect_url(text) or mentions_crawl(text):
-        # 要抓数据、或问"抓到的数据"都不算系统指标
+    # 带 URL 的是去抓，不算指标；
+    # 但含"任务数/采集量"这类指标词时（哪怕提到采集）仍是指标，
+    # 否则"采集任务数是多少"会被运维动作抢走
+    if detect_url(text):
         return False
     return any(k in lowered for k in METRICS_KEYWORDS)
 
@@ -310,13 +328,13 @@ async def route(query: str, tenant_id: str | None = None) -> ResolvedRoute:
     if detect_url(query) and mentions_crawl(query):
         return _decide(query, "crawler", "URL + 采集动作", need_confirm=True)
 
-    # 4. 破坏性动作
-    if is_ops_intent(query):
-        return _decide(query, "ops", "运维动作")
-
-    # 5. 系统指标
+    # 4. 系统指标（先看是不是在问指标：指标问题带"任务/采集"字样时别被运维抢走）
     if is_metrics_intent(query):
         return _decide(query, "metrics", "系统指标")
+
+    # 5. 运维动作（要动手删/清/导出）
+    if is_ops_intent(query):
+        return _decide(query, "ops", "运维动作")
 
     # 6. 采集数据分析
     if is_analyst_intent(query):
